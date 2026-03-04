@@ -61,6 +61,8 @@ Engine_Ext_ModeAbsorb::Engine_Ext_ModeAbsorb(Operator_Ext_ModeAbsorb* op_ext) :
 
 	m_a_E = 0;
 	m_a_H = 0;
+	m_dcBlockBeta = m_Op_MA->m_dcBlockBeta;
+	m_a_H_dc = 0;
 
 	SetNumberOfThreads(1);
 }
@@ -115,7 +117,7 @@ void Engine_Ext_ModeAbsorb::DoPostCurrentUpdatesImpl(EngType* eng, int threadID)
 	unsigned int pos[3] = {0, 0, 0};
 	pos[m_ny] = m_posStart[m_ny];
 
-	m_a_H = 0;
+	double a_H_raw = 0;
 
 	for (unsigned int posP = 0; posP < m_numLines_H[0]; ++posP)
 	{
@@ -125,10 +127,15 @@ void Engine_Ext_ModeAbsorb::DoPostCurrentUpdatesImpl(EngType* eng, int threadID)
 			pos[m_nyPP] = m_posStart[m_nyPP] + posPP;
 
 			// a_H += Curr * (mode_norm * area / edgeLen) = H * mode_norm * area
-			m_a_H += eng->EngType::GetCurr(m_nyP, pos)  * m_H_OverlapW[0][posP][posPP];
-			m_a_H += eng->EngType::GetCurr(m_nyPP, pos) * m_H_OverlapW[1][posP][posPP];
+			a_H_raw += eng->EngType::GetCurr(m_nyP, pos)  * m_H_OverlapW[0][posP][posPP];
+			a_H_raw += eng->EngType::GetCurr(m_nyPP, pos) * m_H_OverlapW[1][posP][posPP];
 		}
 	}
+
+	// DC-blocking filter: track the DC component and subtract it.
+	// Only the AC (time-varying) part represents traveling waves to absorb.
+	m_a_H_dc += m_dcBlockBeta * (a_H_raw - m_a_H_dc);
+	m_a_H = a_H_raw - m_a_H_dc;
 }
 
 void Engine_Ext_ModeAbsorb::DoPostCurrentUpdates(int threadID)

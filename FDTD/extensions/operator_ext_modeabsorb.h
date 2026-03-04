@@ -73,8 +73,12 @@ protected:
 	double** m_H_SubtractW[2];
 
 	// Damping factor: fraction of mode projection to subtract per timestep.
-	// Derived from local Courant number for stability: alpha = v*dt/delta.
 	double m_alpha;
+
+	// DC-blocking filter coefficient: beta = dt / tau.
+	// Blocks static (DC) field components from being absorbed, preventing
+	// instability when the excitation has near-DC content.
+	double m_dcBlockBeta;
 };
 
 #endif // OPERATOR_EXT_MODEABSORB_H

@@ -65,6 +65,7 @@ void Operator_Ext_ModeAbsorb::Initialize()
 
 	m_normalSignPositive = true;
 	m_alpha = 0.5;
+	m_dcBlockBeta = 0;
 
 	m_numLines_E[0] = m_numLines_E[1] = 0;
 	m_numLines_H[0] = m_numLines_H[1] = 0;
@@ -139,6 +140,11 @@ bool Operator_Ext_ModeAbsorb::BuildExtension()
 	// Damping factor for H-field mode subtraction.
 	// Only H-field is absorbed (E-field is handled by Mur ABC).
 	m_alpha = 1.0;
+
+	// DC-blocking filter: beta = dt / tau, with tau = 5 ns.
+	// Blocks static field components from being absorbed (cutoff ~32 MHz).
+	const double DC_BLOCK_TAU = 5.0e-9;
+	m_dcBlockBeta = m_Op->GetTimestep() / DC_BLOCK_TAU;
 
 	unsigned int Ncells[3];
 	for (int i = 0; i < 3; ++i)
@@ -324,4 +330,5 @@ void Operator_Ext_ModeAbsorb::ShowStat(std::ostream &ostr) const
 	ostr << " E-mode lines: " << m_numLines_E[0] << " x " << m_numLines_E[1] << endl;
 	ostr << " H-mode lines: " << m_numLines_H[0] << " x " << m_numLines_H[1] << endl;
 	ostr << " Damping alpha: " << m_alpha << endl;
+	ostr << " DC-block beta: " << m_dcBlockBeta << endl;
 }

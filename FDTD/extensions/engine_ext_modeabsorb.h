@@ -75,6 +75,10 @@ protected:
 	// Overlap coefficients computed per-timestep
 	double m_a_E;
 	double m_a_H;
+
+	// DC-blocking filter state
+	double m_dcBlockBeta;
+	double m_a_H_dc;  // running average (DC component estimate)
 };
 
 #endif // ENGINE_EXT_MODEABSORB_H
