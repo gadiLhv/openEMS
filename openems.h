@@ -179,6 +179,9 @@ protected:
 	//! Setup local absorbing boundary conditions
 	void SetupAbsorbingSheets();
 
+	//! Setup mode-matched waveguide absorbers
+	void SetupModeAbsorbers();
+
 	//! Check whether or not the FDTD-Operator has to store material data.
 	bool SetupMaterialStorages();
 

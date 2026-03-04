@@ -456,7 +456,33 @@ class WaveguidePort(Port):
         
         i_probe.AddBox(m_start, m_stop)
         self.port_props.append(i_probe)
-        
+
+        # Add mode-matched absorber for file-based modes.
+        # Place the absorber between the excitation and the domain boundary,
+        # so it doesn't interfere with the excitation or probe measurements.
+        # Probe is at idx, excitation at idx-1 (dir>0) or idx+1 (dir<0),
+        # absorber goes one more cell toward the boundary: idx-2 or idx+2.
+        if not use_function_expr:
+            abs_start = m_start.copy()
+            abs_stop = m_stop.copy()
+            dir_char = 'xyz'[self.exc_ny]
+            mesh_lines = np.array(CSX.GetGrid().GetLines(dir_char))
+            probe_pos = m_start[self.exc_ny]
+            idx = int(np.argmin(np.abs(mesh_lines - probe_pos)))
+            if self.direction > 0:
+                abs_idx = max(idx - 2, 0)
+            else:
+                abs_idx = min(idx + 2, len(mesh_lines) - 1)
+            abs_start[self.exc_ny] = mesh_lines[abs_idx]
+            abs_stop[self.exc_ny] = mesh_lines[abs_idx]
+
+            ma = CSX.AddModeAbsorb(self.lbl_temp.format('mode_absorb'),
+                NormalSignPositive=(self.direction > 0),
+                EModeFileName=self.E_file,
+                HModeFileName=self.H_file)
+            ma.AddBox(abs_start.tolist(), abs_stop.tolist(), priority=self.priority)
+            self.port_props.append(ma)
+
     def CalcPort(self, sim_path, freq, ref_impedance=None, ref_plane_shift=None, signal_type='pulse', ZL = -1):
         k = 2.0*np.pi*freq/C0*self.ref_index
         self.beta = np.sqrt(k**2 - self.kc**2)
