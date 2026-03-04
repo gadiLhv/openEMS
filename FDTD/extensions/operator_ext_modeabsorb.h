@@ -72,13 +72,13 @@ protected:
 	double** m_H_OverlapW[2];
 	double** m_H_SubtractW[2];
 
-	// Damping factor: fraction of mode projection to subtract per timestep.
-	double m_alpha;
+	// Wave impedance of the medium (Z_w = sqrt(mu/eps)) in Ohm.
+	// Used for directional decomposition: separates forward/backward waves
+	// so only the reflected (backward) wave is absorbed.
+	double m_ZWave;
 
-	// DC-blocking filter coefficient: beta = dt / tau.
-	// Blocks static (DC) field components from being absorbed, preventing
-	// instability when the excitation has near-DC content.
-	double m_dcBlockBeta;
+	// Sign for directional decomposition: +1 if NormalSignPositive, -1 otherwise.
+	double m_dirSign;
 };
 
 #endif // OPERATOR_EXT_MODEABSORB_H

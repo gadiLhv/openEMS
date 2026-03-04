@@ -347,14 +347,15 @@ class WaveguidePort(Port):
     Port, RectWGPort
 
     """
-    def __init__(self, CSX, port_nr, start, stop, exc_dir, E_WG_func, H_WG_func, kc, excite = 0, excite_type = 0, E_WG_file = None, H_WG_file = None, **kw):
-        
+    def __init__(self, CSX, port_nr, start, stop, exc_dir, E_WG_func, H_WG_func, kc, excite = 0, excite_type = 0, E_WG_file = None, H_WG_file = None, wave_impedance = None, **kw):
+
         super(WaveguidePort, self).__init__(CSX, port_nr=port_nr, start=start, stop=stop, excite=excite, excite_type=excite_type, **kw)
         self.exc_ny  = CheckNyDir(exc_dir)
         self.ny_P  = (self.exc_ny+1)%3
         self.ny_PP = (self.exc_ny+2)%3
         self.direction = np.sign(stop[self.exc_ny]-start[self.exc_ny])
         self.ref_index = 1
+        self.wave_impedance = wave_impedance  # Z_w for modal absorber; if None, uses Z0/ref_index
         
         if (self.excite!=0 and stop[self.exc_ny]==start[self.exc_ny]):
             raise Exception('Port length in excitation direction may not be zero if port is excited!')
@@ -476,8 +477,17 @@ class WaveguidePort(Port):
             abs_start[self.exc_ny] = mesh_lines[abs_idx]
             abs_stop[self.exc_ny] = mesh_lines[abs_idx]
 
+            # Wave impedance for directional decomposition.
+            # For TEM (kc=0): Z_wave = Z0 / n (wave impedance of medium)
+            # User can override via wave_impedance parameter.
+            if self.wave_impedance is not None:
+                z_wave = self.wave_impedance
+            else:
+                z_wave = Z0 / self.ref_index
+
             ma = CSX.AddModeAbsorb(self.lbl_temp.format('mode_absorb'),
                 NormalSignPositive=(self.direction > 0),
+                WaveImpedance=z_wave,
                 EModeFileName=self.E_file,
                 HModeFileName=self.H_file)
             ma.AddBox(abs_start.tolist(), abs_stop.tolist(), priority=self.priority)

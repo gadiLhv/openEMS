@@ -31,13 +31,13 @@ public:
 	Engine_Ext_ModeAbsorb(Operator_Ext_ModeAbsorb* op_ext);
 	virtual ~Engine_Ext_ModeAbsorb();
 
-	// E-field absorption: compute overlap after voltage update, subtract in Apply2Voltages
+	// E-field: compute overlap after voltage update
 	virtual void DoPostVoltageUpdates() {Engine_Ext_ModeAbsorb::DoPostVoltageUpdates(0);}
 	virtual void DoPostVoltageUpdates(int threadID);
 	virtual void Apply2Voltages() {Engine_Ext_ModeAbsorb::Apply2Voltages(0);}
 	virtual void Apply2Voltages(int threadID);
 
-	// H-field absorption: compute overlap after current update, subtract in Apply2Current
+	// H-field: compute overlap after current update, then subtract backward wave from BOTH E and H
 	virtual void DoPostCurrentUpdates() {Engine_Ext_ModeAbsorb::DoPostCurrentUpdates(0);}
 	virtual void DoPostCurrentUpdates(int threadID);
 	virtual void Apply2Current() {Engine_Ext_ModeAbsorb::Apply2Current(0);}
@@ -73,12 +73,12 @@ protected:
 	double** m_H_SubtractW[2];
 
 	// Overlap coefficients computed per-timestep
-	double m_a_E;
-	double m_a_H;
+	double m_a_E;  // E-field mode overlap (voltage-like)
+	double m_a_H;  // H-field mode overlap (current-like)
 
-	// DC-blocking filter state
-	double m_dcBlockBeta;
-	double m_a_H_dc;  // running average (DC component estimate)
+	// Wave impedance and directional sign
+	double m_ZWave;
+	double m_dirSign;
 };
 
 #endif // ENGINE_EXT_MODEABSORB_H

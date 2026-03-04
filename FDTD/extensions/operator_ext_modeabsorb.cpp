@@ -64,8 +64,8 @@ void Operator_Ext_ModeAbsorb::Initialize()
 	}
 
 	m_normalSignPositive = true;
-	m_alpha = 0.5;
-	m_dcBlockBeta = 0;
+	m_ZWave = 376.73;
+	m_dirSign = 1.0;
 
 	m_numLines_E[0] = m_numLines_E[1] = 0;
 	m_numLines_H[0] = m_numLines_H[1] = 0;
@@ -124,6 +124,7 @@ bool Operator_Ext_ModeAbsorb::SetInitParams(CSPrimitives* prim, CSPropModeAbsorb
 	}
 
 	m_normalSignPositive = prop->GetNormalSignPositive();
+	m_ZWave = prop->GetWaveImpedance();
 	m_EModeFileName = prop->GetEModeFileName();
 	m_HModeFileName = prop->GetHModeFileName();
 
@@ -137,14 +138,8 @@ bool Operator_Ext_ModeAbsorb::BuildExtension()
 	m_nyP  = (m_ny + 1) % 3;
 	m_nyPP = (m_ny + 2) % 3;
 
-	// Damping factor for H-field mode subtraction.
-	// Only H-field is absorbed (E-field is handled by Mur ABC).
-	m_alpha = 1.0;
-
-	// DC-blocking filter: beta = dt / tau, with tau = 5 ns.
-	// Blocks static field components from being absorbed (cutoff ~32 MHz).
-	const double DC_BLOCK_TAU = 5.0e-9;
-	m_dcBlockBeta = m_Op->GetTimestep() / DC_BLOCK_TAU;
+	// Directional sign for forward/backward wave decomposition.
+	m_dirSign = m_normalSignPositive ? 1.0 : -1.0;
 
 	unsigned int Ncells[3];
 	for (int i = 0; i < 3; ++i)
@@ -224,10 +219,10 @@ bool Operator_Ext_ModeAbsorb::BuildExtension()
 					m_E_OverlapW[0][posP][posPP] = (edgeLen_P  > 0) ? mP  * area / edgeLen_P  : 0;
 					m_E_OverlapW[1][posP][posPP] = (edgeLen_PP > 0) ? mPP * area / edgeLen_PP : 0;
 
-					// SubtractW: alpha * mode_norm * edgeLen
-					// (multiply by overlap coeff to get voltage correction, with damping)
-					m_E_SubtractW[0][posP][posPP] = m_alpha * mP  * edgeLen_P;
-					m_E_SubtractW[1][posP][posPP] = m_alpha * mPP * edgeLen_PP;
+					// SubtractW: * mode_norm * edgeLen
+					// (multiply by overlap coeff to get voltage/current correction)
+					m_E_SubtractW[0][posP][posPP] = mP  * edgeLen_P;
+					m_E_SubtractW[1][posP][posPP] = mPP * edgeLen_PP;
 				}
 			}
 		}
@@ -305,8 +300,8 @@ bool Operator_Ext_ModeAbsorb::BuildExtension()
 					m_H_OverlapW[0][posP][posPP] = (edgeLen_P  > 0) ? mP  * area / edgeLen_P  : 0;
 					m_H_OverlapW[1][posP][posPP] = (edgeLen_PP > 0) ? mPP * area / edgeLen_PP : 0;
 
-					m_H_SubtractW[0][posP][posPP] = m_alpha * mP  * edgeLen_P;
-					m_H_SubtractW[1][posP][posPP] = m_alpha * mPP * edgeLen_PP;
+					m_H_SubtractW[0][posP][posPP] = mP  * edgeLen_P;
+					m_H_SubtractW[1][posP][posPP] = mPP * edgeLen_PP;
 				}
 			}
 		}
@@ -329,6 +324,6 @@ void Operator_Ext_ModeAbsorb::ShowStat(std::ostream &ostr) const
 	Operator_Extension::ShowStat(ostr);
 	ostr << " E-mode lines: " << m_numLines_E[0] << " x " << m_numLines_E[1] << endl;
 	ostr << " H-mode lines: " << m_numLines_H[0] << " x " << m_numLines_H[1] << endl;
-	ostr << " Damping alpha: " << m_alpha << endl;
-	ostr << " DC-block beta: " << m_dcBlockBeta << endl;
+	ostr << " Wave impedance: " << m_ZWave << " Ohm" << endl;
+	ostr << " Direction sign: " << m_dirSign << endl;
 }

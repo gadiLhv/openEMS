@@ -16,16 +16,17 @@
 */
 
 /*
- * Mode-matched waveguide absorber engine extension.
+ * Directional mode-matched waveguide absorber (CST-style port absorber).
  *
  * At each timestep:
- * 1. Compute the overlap integral of the field with the mode template
- * 2. Subtract mode_shape * overlap_coefficient from the field
+ * 1. After E update: compute a_E = overlap integral of E-field with E-mode
+ * 2. After H update: compute a_H = overlap integral of H-field with H-mode
+ * 3. Decompose into forward/backward waves using wave impedance:
+ *      a_bwd = (a_E - sign * Z_w * a_H) / 2
+ * 4. Subtract ONLY the backward (reflected) wave from both E and H fields
  *
- * FDTD stores voltages (V = E * edge_length) and currents (I = H * edge_length),
- * not field values directly. The operator pre-computes two weight arrays:
- *   OverlapW = mode_norm * area / edgeLen  (converts Volt to field*mode*area)
- *   SubtractW = mode_norm * edgeLen        (converts field correction to Volt)
+ * This gives a perfectly matched port absorber that works at all frequencies
+ * including DC, without requiring Mur ABC or any external boundary condition.
  */
 
 #include "engine_ext_modeabsorb.h"
@@ -61,8 +62,8 @@ Engine_Ext_ModeAbsorb::Engine_Ext_ModeAbsorb(Operator_Ext_ModeAbsorb* op_ext) :
 
 	m_a_E = 0;
 	m_a_H = 0;
-	m_dcBlockBeta = m_Op_MA->m_dcBlockBeta;
-	m_a_H_dc = 0;
+	m_ZWave = m_Op_MA->m_ZWave;
+	m_dirSign = m_Op_MA->m_dirSign;
 
 	SetNumberOfThreads(1);
 }
@@ -72,17 +73,32 @@ Engine_Ext_ModeAbsorb::~Engine_Ext_ModeAbsorb()
 }
 
 // ============================================================================
-// E-field absorption
+// E-field overlap: compute a_E after voltage update
 // ============================================================================
 
-// DoPostVoltageUpdates: E-field absorption disabled.
-// The Mur ABC at the simulation boundaries already handles E-field absorption.
-// Only H-field absorption is needed (the H-field doesn't decay with Mur ABC alone).
 template <typename EngType>
 void Engine_Ext_ModeAbsorb::DoPostVoltageUpdatesImpl(EngType* eng, int threadID)
 {
-	(void)eng;
-	(void)threadID;
+	if (m_Eng == NULL) return;
+	if (threadID != 0) return;
+
+	unsigned int pos[3] = {0, 0, 0};
+	pos[m_ny] = m_posStart[m_ny];
+
+	m_a_E = 0;
+
+	for (unsigned int posP = 0; posP < m_numLines_E[0]; ++posP)
+	{
+		pos[m_nyP] = m_posStart[m_nyP] + posP;
+		for (unsigned int posPP = 0; posPP < m_numLines_E[1]; ++posPP)
+		{
+			pos[m_nyPP] = m_posStart[m_nyPP] + posPP;
+
+			// a_E += Volt * (mode_norm * area / edgeLen) = E * mode_norm * area
+			m_a_E += eng->EngType::GetVolt(m_nyP, pos)  * m_E_OverlapW[0][posP][posPP];
+			m_a_E += eng->EngType::GetVolt(m_nyPP, pos) * m_E_OverlapW[1][posP][posPP];
+		}
+	}
 }
 
 void Engine_Ext_ModeAbsorb::DoPostVoltageUpdates(int threadID)
@@ -90,7 +106,8 @@ void Engine_Ext_ModeAbsorb::DoPostVoltageUpdates(int threadID)
 	ENG_DISPATCH_ARGS(DoPostVoltageUpdatesImpl, threadID);
 }
 
-// Apply2Voltages: E-field absorption disabled (handled by Mur ABC).
+// Apply2Voltages: nothing to do here; E subtraction happens in Apply2Current
+// after we have both a_E and a_H for the directional decomposition.
 template <typename EngType>
 void Engine_Ext_ModeAbsorb::Apply2VoltagesImpl(EngType* eng, int threadID)
 {
@@ -104,10 +121,9 @@ void Engine_Ext_ModeAbsorb::Apply2Voltages(int threadID)
 }
 
 // ============================================================================
-// H-field absorption
+// H-field overlap: compute a_H after current update
 // ============================================================================
 
-// DoPostCurrentUpdates: compute the H-field overlap integral with the mode
 template <typename EngType>
 void Engine_Ext_ModeAbsorb::DoPostCurrentUpdatesImpl(EngType* eng, int threadID)
 {
@@ -117,7 +133,7 @@ void Engine_Ext_ModeAbsorb::DoPostCurrentUpdatesImpl(EngType* eng, int threadID)
 	unsigned int pos[3] = {0, 0, 0};
 	pos[m_ny] = m_posStart[m_ny];
 
-	double a_H_raw = 0;
+	m_a_H = 0;
 
 	for (unsigned int posP = 0; posP < m_numLines_H[0]; ++posP)
 	{
@@ -127,15 +143,10 @@ void Engine_Ext_ModeAbsorb::DoPostCurrentUpdatesImpl(EngType* eng, int threadID)
 			pos[m_nyPP] = m_posStart[m_nyPP] + posPP;
 
 			// a_H += Curr * (mode_norm * area / edgeLen) = H * mode_norm * area
-			a_H_raw += eng->EngType::GetCurr(m_nyP, pos)  * m_H_OverlapW[0][posP][posPP];
-			a_H_raw += eng->EngType::GetCurr(m_nyPP, pos) * m_H_OverlapW[1][posP][posPP];
+			m_a_H += eng->EngType::GetCurr(m_nyP, pos)  * m_H_OverlapW[0][posP][posPP];
+			m_a_H += eng->EngType::GetCurr(m_nyPP, pos) * m_H_OverlapW[1][posP][posPP];
 		}
 	}
-
-	// DC-blocking filter: track the DC component and subtract it.
-	// Only the AC (time-varying) part represents traveling waves to absorb.
-	m_a_H_dc += m_dcBlockBeta * (a_H_raw - m_a_H_dc);
-	m_a_H = a_H_raw - m_a_H_dc;
 }
 
 void Engine_Ext_ModeAbsorb::DoPostCurrentUpdates(int threadID)
@@ -143,15 +154,44 @@ void Engine_Ext_ModeAbsorb::DoPostCurrentUpdates(int threadID)
 	ENG_DISPATCH_ARGS(DoPostCurrentUpdatesImpl, threadID);
 }
 
-// Apply2Current: subtract the mode-matched H-field component
+// ============================================================================
+// Apply2Current: subtract the backward (reflected) wave from BOTH H and E
+// ============================================================================
+
 template <typename EngType>
 void Engine_Ext_ModeAbsorb::Apply2CurrentImpl(EngType* eng, int threadID)
 {
 	if (m_Eng == NULL) return;
 	if (threadID != 0) return;
 
+	// Directional decomposition:
+	//   a_fwd = (a_E + sign * Z_w * a_H) / 2   (forward/incident wave)
+	//   a_bwd = (a_E - sign * Z_w * a_H) / 2   (backward/reflected wave)
+	// We subtract only a_bwd from both fields.
+	double a_bwd = 0.5 * (m_a_E - m_dirSign * m_ZWave * m_a_H);
+
 	unsigned int pos[3] = {0, 0, 0};
 	pos[m_ny] = m_posStart[m_ny];
+
+	// Subtract backward wave E-field component (voltage correction)
+	for (unsigned int posP = 0; posP < m_numLines_E[0]; ++posP)
+	{
+		pos[m_nyP] = m_posStart[m_nyP] + posP;
+		for (unsigned int posPP = 0; posPP < m_numLines_E[1]; ++posPP)
+		{
+			pos[m_nyPP] = m_posStart[m_nyPP] + posPP;
+
+			eng->EngType::SetVolt(m_nyP, pos,
+				eng->EngType::GetVolt(m_nyP, pos) - a_bwd * m_E_SubtractW[0][posP][posPP]);
+			eng->EngType::SetVolt(m_nyPP, pos,
+				eng->EngType::GetVolt(m_nyPP, pos) - a_bwd * m_E_SubtractW[1][posP][posPP]);
+		}
+	}
+
+	// Subtract backward wave H-field component (current correction)
+	// For backward wave, H_bwd has opposite sign to forward wave's H.
+	// So: Curr_new = Curr + sign * (a_bwd / Z_w) * H_SubtractW
+	double h_coeff = m_dirSign * a_bwd / m_ZWave;
 
 	for (unsigned int posP = 0; posP < m_numLines_H[0]; ++posP)
 	{
@@ -160,12 +200,10 @@ void Engine_Ext_ModeAbsorb::Apply2CurrentImpl(EngType* eng, int threadID)
 		{
 			pos[m_nyPP] = m_posStart[m_nyPP] + posPP;
 
-			// Curr -= a_H * (mode_norm * edgeLen) = a_H * mode_norm * edgeLen
-			// -> H_new = H - a_H * mode_norm (correct field subtraction)
 			eng->EngType::SetCurr(m_nyP, pos,
-				eng->EngType::GetCurr(m_nyP, pos) - m_a_H * m_H_SubtractW[0][posP][posPP]);
+				eng->EngType::GetCurr(m_nyP, pos) + h_coeff * m_H_SubtractW[0][posP][posPP]);
 			eng->EngType::SetCurr(m_nyPP, pos,
-				eng->EngType::GetCurr(m_nyPP, pos) - m_a_H * m_H_SubtractW[1][posP][posPP]);
+				eng->EngType::GetCurr(m_nyPP, pos) + h_coeff * m_H_SubtractW[1][posP][posPP]);
 		}
 	}
 }
