@@ -470,7 +470,9 @@ void openEMS::SetupModeAbsorbers()
 			CSPrimitives* cPrimitive = cs_ma_prims.at(primIdx);
 
 			if (op_ext_ma->SetInitParams(cPrimitive, cMAprops))
+			{
 				FDTD_Op->AddExtension(op_ext_ma);
+			}
 			else
 			{
 				cerr << "openEMS::SetupModeAbsorbers(): Warning: Mode absorber #" << primIdx << " setup failed." << endl;

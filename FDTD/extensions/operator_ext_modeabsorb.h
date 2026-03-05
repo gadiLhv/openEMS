@@ -46,6 +46,8 @@ public:
 
 	virtual bool SetInitParams(CSPrimitives* prim, CSPropModeAbsorb* prop);
 
+	int GetNormalDir() const { return m_ny; }
+
 protected:
 	Operator_Ext_ModeAbsorb(Operator* op, Operator_Ext_ModeAbsorb* op_ext);
 	void Initialize();
