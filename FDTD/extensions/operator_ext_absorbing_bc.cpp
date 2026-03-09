@@ -58,6 +58,8 @@ void Operator_Ext_Absorbing_BC::Initialize()
 	m_ABCtype = ABCtype::UNDEFINED;
 
 	m_phaseVelocity = 0.0;
+
+	m_dampingFactor = 0.0;
 }
 
 bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbingBC* abc_prop)
@@ -129,6 +131,12 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 	// Copy all of the relevant data, so BuildExtension ca0n work
 	m_ABCtype = (ABCtype)(abc_prop->GetAbsorbingBoundaryType());
 	m_normalSignPositive = abc_prop->GetNormalSignPositive();
+
+	double temp_dampingFactor = (double)abc_prop->GetDampingFactor();
+	if (temp_dampingFactor == 0.0)
+		m_dampingFactor = 0.0;
+	else
+		m_dampingFactor = std::pow(10.0,-temp_dampingFactor);
 
 	prim->SetPrimitiveUsed(true);
 

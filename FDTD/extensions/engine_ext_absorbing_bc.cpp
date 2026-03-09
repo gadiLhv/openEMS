@@ -77,6 +77,8 @@ Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_e
 	m_I_nyP.Init("curr_nyP",m_numLines);
 	m_I_nyPP.Init("curr_nyPP",m_numLines);
 
+	m_dampingFactor = m_Op_ABC->m_dampingFactor;
+
 	// One thread per boundary
 	SetNumberOfThreads(1);
 }
@@ -199,9 +201,12 @@ void Engine_Ext_Absorbing_BC::Apply2VoltagesImpl(EngType* eng, int threadID)
 		{
 			pos[m_nyPP] = m_posStart[m_nyPP] + j;
 
-			// E(i,n + 1) = E(i + s,n) + [K1*E(i + s,n) - K1*E(i,n)]
-			eng->EngType::SetVolt(m_nyP ,pos, m_V_nyP (i,j));
-			eng->EngType::SetVolt(m_nyPP,pos, m_V_nyPP(i,j));
+			// E(i,n + 1) = E(i + s,n) + K1*[E(i + s,n) - E(i,n)]
+			// E_damped(i,n + 1) = (1 - a)*E(i,n + 1) + a*E(i,n);
+			//eng->EngType::SetVolt(m_nyP , pos, (1.0 - m_dampingFactor)*m_V_nyP (i,j) + m_dampingFactor*eng->EngType::GetVolt(m_nyP , pos));
+			//eng->EngType::SetVolt(m_nyPP, pos, (1.0 - m_dampingFactor)*m_V_nyPP(i,j) + m_dampingFactor*eng->EngType::GetVolt(m_nyPP, pos));
+			eng->EngType::SetVolt(m_nyP , pos, m_V_nyP (i,j));
+			eng->EngType::SetVolt(m_nyPP, pos, m_V_nyPP(i,j));
 		}
 
 	}
@@ -351,8 +356,19 @@ void Engine_Ext_Absorbing_BC::Apply2CurrentImpl(EngType* eng, int threadID)
 			pos[m_nyPP] = m_posStart[m_nyPP] + j;
 
 			// H(i + s,n) = (Hsa*K2 + Hc)/(1 + K2)
-			eng->EngType::SetCurr(m_nyP ,pos, (m_I_nyP (i,j)*m_K2_nyP (i,j) + eng->EngType::GetCurr(m_nyP ,pos))/(m_K2_nyP (i,j) + 1.0));
-			eng->EngType::SetCurr(m_nyPP,pos, (m_I_nyPP(i,j)*m_K2_nyPP(i,j) + eng->EngType::GetCurr(m_nyPP,pos))/(m_K2_nyPP(i,j) + 1.0));
+			// H_damped(i,n + 1) = (1 - a)*H(i,n + 1) + a*H(i,n);
+//			eng->EngType::SetCurr(m_nyP , pos,
+//					(1.0 - m_dampingFactor)*((m_I_nyP (i,j)*m_K2_nyP (i,j) + eng->EngType::GetCurr(m_nyP ,pos))/(m_K2_nyP (i,j) + 1.0))
+//					+
+//					m_dampingFactor*eng->EngType::GetCurr(m_nyP , pos));
+//			eng->EngType::SetCurr(m_nyPP, pos,
+//					(1.0 - m_dampingFactor)*((m_I_nyPP(i,j)*m_K2_nyPP(i,j) + eng->EngType::GetCurr(m_nyPP,pos))/(m_K2_nyPP(i,j) + 1.0))
+//					+
+//					m_dampingFactor*eng->EngType::GetCurr(m_nyPP, pos));
+			eng->EngType::SetCurr(m_nyP , pos,
+					(1.0 - m_dampingFactor)*((m_I_nyP (i,j)*m_K2_nyP (i,j) + eng->EngType::GetCurr(m_nyP ,pos))/(m_K2_nyP (i,j) + 1.0)));
+			eng->EngType::SetCurr(m_nyPP, pos,
+					(1.0 - m_dampingFactor)*((m_I_nyPP(i,j)*m_K2_nyPP(i,j) + eng->EngType::GetCurr(m_nyPP,pos))/(m_K2_nyPP(i,j) + 1.0)));
 
 
 		}

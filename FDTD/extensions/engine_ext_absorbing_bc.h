@@ -86,6 +86,8 @@ protected:
 
 	int				m_ABCtype;					// Declared as integer here, because of the forward declaration formatting.
 
+	double			m_dampingFactor;
+
 	std::vector<unsigned int>	m_threadStartLine;
 	std::vector<unsigned int>	m_linesPerThread;
 
@@ -98,7 +100,6 @@ protected:
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_V_nyPP;	// Storage for voltage, direction n + 2
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_I_nyP;	// Storage for currents, direction n + 1
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_I_nyPP;	// Storage for currents, direction n + 2
-
 
 };
 

@@ -99,6 +99,8 @@ protected:
 
 	double			m_phaseVelocity;
 
+	double			m_dampingFactor;
+
 	// Coefficients, to be initialized on-demand.
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_K1_nyP;
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_K1_nyPP;
