@@ -154,6 +154,8 @@ protected:
 	Engine* FDTD_Eng;
 	Engine_Ext_SteadyState* Eng_Ext_SSD;
 	ProcessingArray* PA;
+	bool m_modalAbsorbers;
+
 
 	Excitation* m_Exc;
 

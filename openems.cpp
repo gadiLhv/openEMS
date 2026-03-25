@@ -82,6 +82,7 @@ openEMS::openEMS()
 
 	m_engine = EngineType_Multithreaded; //default engine type
 	m_engine_numThreads = 0;
+	m_modalAbsorbers = false;
 
 	m_Abort = false;
 	m_Exc = 0;
@@ -437,8 +438,13 @@ void openEMS::SetupAbsorbingSheets()
 			// Initialize all necessary parameters so the extension operator can be
 			// built later on.
 			if (op_ext_abc->SetInitParams(cPrimitive,cABCprops))
+			{
 				// Finally, add the extension
 				FDTD_Op->AddExtension(op_ext_abc);
+				// Check if any added operator is of type "modal absorber"
+				if ((cABCprops->GetType() == CSPropAbsorbingBC::MODAL_E) || (cABCprops->GetType() == CSPropAbsorbingBC::MODAL_E))
+					m_modalAbsorbers = true;
+			}
 			else
 			{
 				cerr << "openEMS::SetupAbsorbingSheets(): Warning: Absorbing sheet #" << sheetIdx << " setup failed.";
@@ -1329,6 +1335,15 @@ int openEMS::SetupFDTD()
 	{
 		Eng_Ext_SSD = dynamic_cast<Engine_Ext_SteadyState*>(Op_Ext_SSD->GetEngineExtention());
 		Eng_Ext_SSD->SetEngineInterface(this->NewEngineInterface());
+	}
+
+	// In case absorber extensions need to be linked to field probes
+	if (m_modalAbsorbers)
+	{
+		for(unsigned int engExtIdx = 0 ; engExtIdx < FDTD_Op->GetNumberOfExtentions() ; engExtIdx++)
+		{
+
+		}
 	}
 
 	//setup all processing classes
