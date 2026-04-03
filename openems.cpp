@@ -442,8 +442,29 @@ void openEMS::SetupAbsorbingSheets()
 				// Finally, add the extension
 				FDTD_Op->AddExtension(op_ext_abc);
 				// Check if any added operator is of type "modal absorber"
-				if ((cABCprops->GetType() == CSPropAbsorbingBC::MODAL_E) || (cABCprops->GetType() == CSPropAbsorbingBC::MODAL_E))
+				if (cABCprops->GetType() == CSPropAbsorbingBC::MODAL)
+				{
 					m_modalAbsorbers = true;
+
+					// Initialize the mode matching integral here?
+					CSPrimBox* cSheet = dynamic_cast<CSPrimBox*>(cPrimitive);
+					// If this just so happen to not be a sheet, ignore this
+					if (!cSheet)
+					{
+						cerr << "Operator_Ext_Absorbing_BC::SetInitParams(): Warning: Absorbing sheet validation failed, skipping. "
+													<< " ID: " << cPrimitive->GetID() << " @ Property: " << cABCprops->GetName() << endl;
+
+						// TODO: What do I do here?
+						continue;
+					}
+
+					// Check that this is actually a sheet
+					// Get box start and stop positions
+
+
+					// Add two mode matching integral in respective locations
+					cPrimitive->GetBoundBox(dBoundBox, PreserveOrientation)
+				}
 			}
 			else
 			{

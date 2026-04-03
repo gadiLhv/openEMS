@@ -102,7 +102,9 @@ protected:
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_I_nyP;	// Storage for currents, direction n + 1
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_I_nyPP;	// Storage for currents, direction n + 2
 
-	Engine_Interface_FDTD* m_Eng_Interface;
+	Engine_Interface_FDTD* 	m_Eng_Interface_E,	// Container for E-Field mode match process
+							m_Eng_Interface_H;	// Container for H-field mode match process
+
 
 };
 
