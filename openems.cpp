@@ -35,6 +35,7 @@
 #include "FDTD/extensions/operator_ext_steadystate.h"
 #include "FDTD/extensions/operator_ext_absorbing_bc.h"
 #include "FDTD/extensions/engine_ext_steadystate.h"
+#include "FDTD/extensions/engine_ext_absorbing_bc.h"
 #include "FDTD/engine_interface_fdtd.h"
 #include "FDTD/engine_interface_cylindrical_fdtd.h"
 #include "Common/processvoltage.h"
@@ -441,30 +442,10 @@ void openEMS::SetupAbsorbingSheets()
 			{
 				// Finally, add the extension
 				FDTD_Op->AddExtension(op_ext_abc);
-				// Check if any added operator is of type "modal absorber"
-				if (cABCprops->GetType() == CSPropAbsorbingBC::MODAL)
-				{
+				// Set flag if any added absorber is of modal type (mode matching integrals
+				// are wired later in SetupModalAbsorbProcessing, after the engine is created).
+				if (op_ext_abc->GetABCtype() == Operator_Ext_Absorbing_BC::MODAL)
 					m_modalAbsorbers = true;
-
-					// Initialize the mode matching integral here?
-					CSPrimBox* cSheet = dynamic_cast<CSPrimBox*>(cPrimitive);
-					// If this just so happen to not be a sheet, ignore this
-					if (!cSheet)
-					{
-						cerr << "Operator_Ext_Absorbing_BC::SetInitParams(): Warning: Absorbing sheet validation failed, skipping. "
-													<< " ID: " << cPrimitive->GetID() << " @ Property: " << cABCprops->GetName() << endl;
-
-						// TODO: What do I do here?
-						continue;
-					}
-
-					// Check that this is actually a sheet
-					// Get box start and stop positions
-
-
-					// Add two mode matching integral in respective locations
-					cPrimitive->GetBoundBox(dBoundBox, PreserveOrientation)
-				}
 			}
 			else
 			{
@@ -476,6 +457,49 @@ void openEMS::SetupAbsorbingSheets()
 
 	}
 
+}
+
+void openEMS::SetupModalAbsorbProcessing()
+{
+	for (unsigned int i = 0; i < FDTD_Op->GetNumberOfExtentions(); ++i)
+	{
+		Operator_Ext_Absorbing_BC* op_ext = dynamic_cast<Operator_Ext_Absorbing_BC*>(FDTD_Op->GetExtension(i));
+		if (!op_ext || op_ext->GetABCtype() != Operator_Ext_Absorbing_BC::MODAL)
+			continue;
+
+		Engine_Ext_Absorbing_BC* eng_ext = dynamic_cast<Engine_Ext_Absorbing_BC*>(op_ext->GetEngineExtention());
+		if (!eng_ext)
+		{
+			cerr << "openEMS::SetupModalAbsorbProcessing(): Error: No engine extension found for modal absorber sheet " << i << endl;
+			continue;
+		}
+
+		// Create E-field mode match integral (field type 0).
+		ProcessModeMatch* pmm_E = new ProcessModeMatch(NewEngineInterface());
+		pmm_E->SetFieldType(0);
+		pmm_E->GetNormalDir(op_ext->GetNy());
+		pmm_E->SetProcessInterval(1);
+		pmm_E->DefineStartStopCoord(op_ext->m_dSheetStart, op_ext->m_dSheetStop);
+		if (!op_ext->GetEModeFileName().empty())
+			pmm_E->SetModeFileName(op_ext->GetEModeFileName());
+		PA->AddProcessing(pmm_E);
+
+		// Create H-field mode match integral (field type 1).
+		// H-field lives on the dual mesh and is evaluated at half-integer timesteps.
+		ProcessModeMatch* pmm_H = new ProcessModeMatch(NewEngineInterface());
+		pmm_H->SetFieldType(1);
+		pmm_H->SetDualTime(true);
+		pmm_H->SetDualMesh(true);
+		pmm_H->GetNormalDir(op_ext->GetNy());
+		pmm_H->SetProcessInterval(1);
+		pmm_H->DefineStartStopCoord(op_ext->m_dSheetStart, op_ext->m_dSheetStop);
+		if (!op_ext->GetHModeFileName().empty())
+			pmm_H->SetModeFileName(op_ext->GetHModeFileName());
+		PA->AddProcessing(pmm_H);
+
+		// Wire both integrals to the engine extension so it can read their results.
+		eng_ext->SetModeMatchProcessings(pmm_E, pmm_H);
+	}
 }
 
 Engine_Interface_FDTD* openEMS::NewEngineInterface(int multigridlevel)
@@ -1358,21 +1382,17 @@ int openEMS::SetupFDTD()
 		Eng_Ext_SSD->SetEngineInterface(this->NewEngineInterface());
 	}
 
-	// In case absorber extensions need to be linked to field probes
-	if (m_modalAbsorbers)
-	{
-		for(unsigned int engExtIdx = 0 ; engExtIdx < FDTD_Op->GetNumberOfExtentions() ; engExtIdx++)
-		{
-
-		}
-	}
-
 	//setup all processing classes
 	if (SetupProcessing()==false)
 	{
 		Signal::SetupHandlerForSIGINT(SIGNAL_ORIGINAL);
 		return 2;
 	}
+
+	// Wire mode-match integrals to modal absorber engine extensions.
+	// Must come after SetupProcessing() (PA exists) and CreateEngine() (Engine_Ext exists).
+	if (m_modalAbsorbers)
+		SetupModalAbsorbProcessing();
 
 	// Cleanup all unused material storages...
 	FDTD_Op->CleanupMaterialStorage();

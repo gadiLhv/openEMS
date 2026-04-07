@@ -46,11 +46,13 @@ public:
 
 	// This should be a replica of the CSXCAD property, but can also be something
 	// else, later
+	// Note: integer values must align with CSPropAbsorbingBC's absorbing type enum
 	enum ABCtype
 	{
 		UNDEFINED	= 0,
 		MUR_1ST 	= 1,	// Mur's BC, 1st order
-		MUR_1ST_SA 	= 2		// Mur's BC, 1st order, with Super Absorption
+		MUR_1ST_SA 	= 2,	// Mur's BC, 1st order, with Super Absorption
+		MODAL		= 3		// Modal absorption
 	};
 
 	Operator_Ext_Absorbing_BC(Operator* op);
@@ -74,6 +76,12 @@ public:
 	//! Initialize all parameters, so the extension can be built later
 	virtual bool SetInitParams(CSPrimitives* prim, CSPropAbsorbingBC* abc_prop);
 
+	ABCtype GetABCtype() const { return m_ABCtype; }
+	int GetNy() const { return m_ny; }
+	std::string GetEModeFileName() const { return m_EModeFileName; }
+	std::string GetHModeFileName() const { return m_HModeFileName; }
+	double GetZw() const { return m_Zw; }
+
 protected:
 
 	Operator_Ext_Absorbing_BC(Operator* op, Operator_Ext_Absorbing_BC* op_ext);
@@ -86,9 +94,20 @@ protected:
 					m_nyP,
 					m_nyPP;
 
-	// Storage for sheet bounding box start and stop.
+	// Storage for sheet bounding box start and stop (grid indices).
 	unsigned int	m_sheetX0[3];
 	unsigned int	m_sheetX1[3];
+
+	// Physical coordinates of the sheet bounding box (drawing units), stored from SetInitParams.
+	double			m_dSheetStart[3];
+	double			m_dSheetStop[3];
+
+	// Mode file names for modal absorber (empty for non-modal types).
+	std::string		m_EModeFileName;
+	std::string		m_HModeFileName;
+
+	// Wave impedance for modal absorber (0.0 if not set).
+	double			m_Zw;
 
 	unsigned int 	m_numLines[2];
 

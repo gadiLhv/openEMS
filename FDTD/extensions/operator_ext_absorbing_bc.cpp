@@ -58,6 +58,7 @@ void Operator_Ext_Absorbing_BC::Initialize()
 	m_ABCtype = ABCtype::UNDEFINED;
 
 	m_phaseVelocity = 0.0;
+	m_Zw = 0.0;
 }
 
 bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbingBC* abc_prop)
@@ -74,6 +75,15 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 	// Check that this is actually a sheet
 	// Get box start and stop positions
 
+
+	// Store physical bounding box coordinates before snapping, for use by SetupModalAbsorbProcessing.
+	double* dStart_phys = cSheet->GetStartCoord()->GetCoords(m_Op->m_MeshType);
+	double* dStop_phys  = cSheet->GetStopCoord()->GetCoords(m_Op->m_MeshType);
+	for (int n = 0; n < 3; ++n)
+	{
+		m_dSheetStart[n] = dStart_phys[n];
+		m_dSheetStop[n]  = dStop_phys[n];
+	}
 
 	// snap to the native coordinate system
 	int Snap_Dimension =
@@ -126,9 +136,12 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 		m_phaseVelocity = __C0__;
 	}
 
-	// Copy all of the relevant data, so BuildExtension ca0n work
+	// Copy all of the relevant data, so BuildExtension can work
 	m_ABCtype = (ABCtype)(abc_prop->GetAbsorbingBoundaryType());
 	m_normalSignPositive = abc_prop->GetNormalSignPositive();
+	m_EModeFileName = abc_prop->GetEModeFileName();
+	m_HModeFileName = abc_prop->GetHModeFileName();
+	m_Zw = abc_prop->GetWaveImpedance();
 
 	prim->SetPrimitiveUsed(true);
 

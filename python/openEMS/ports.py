@@ -528,3 +528,62 @@ class RectWGPort(WaveguidePort):
 
         super(RectWGPort, self).__init__(CSX, port_nr=port_nr, start=start, stop=stop, exc_dir=exc_dir, E_WG_func=E_func, H_WG_func=H_func, kc=kc, excite=excite, **kw)
 
+
+###############################################################################
+class ModalAbsorber:
+    """
+    Modal absorbing boundary condition.
+
+    Places a CSPropAbsorbingBC sheet of type MODAL at the given location.
+    The E and H mode shapes are loaded from CSV files at simulation time by
+    the openEMS engine via ProcessModeMatch.
+
+    Parameters
+    ----------
+    CSX : ContinuousStructure
+    start, stop : array-like, length 3
+        Bounding box of the absorber sheet.  The sheet must be flat (i.e.
+        ``start[prop_dir] == stop[prop_dir]``).
+    prop_dir : str or int
+        Propagation direction ('x', 'y', 'z', or 0/1/2).
+    E_file : str
+        Path to the CSV file for the E-field mode shape.
+    H_file : str
+        Path to the CSV file for the H-field mode shape.
+    normal_positive : bool
+        True if the absorber faces incoming energy arriving from the negative
+        direction (i.e. the absorber is at the high end of the waveguide).
+        False if the energy arrives from the positive direction.
+    phase_velocity : float, optional
+        Phase velocity of the mode (m/s).  Defaults to C0 (inside CSXCAD).
+    priority : int
+        CSXCAD primitive priority.
+    """
+
+    def __init__(self, CSX, start, stop, prop_dir, E_file, H_file,
+                 normal_positive=True, phase_velocity=None, Zw=None, priority=0):
+        from CSXCAD.CSProperties import ABCtype
+
+        self.CSX = CSX
+        self.start = np.array(start, dtype=float)
+        self.stop  = np.array(stop,  dtype=float)
+        self.prop_dir = CheckNyDir(prop_dir)
+        self.E_file = E_file
+        self.H_file = H_file
+        self.normal_positive = normal_positive
+
+        prop_name = 'modal_absorber_{}'.format(id(self))
+        kw = dict(
+            NormalSignPositive   = normal_positive,
+            AbsorbingBoundaryType = ABCtype.MODAL,
+            EModeFileName        = E_file,
+            HModeFileName        = H_file,
+        )
+        if phase_velocity is not None:
+            kw['PhaseVelocity'] = phase_velocity
+        if Zw is not None:
+            kw['WaveImpedance'] = Zw
+
+        self.abc_prop = CSX.AddAbsorbingBC(prop_name, **kw)
+        self.abc_prop.AddBox(start, stop, priority=priority)
+

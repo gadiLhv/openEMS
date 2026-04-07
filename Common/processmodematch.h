@@ -54,6 +54,13 @@ public:
 	virtual int GetNumberOfIntegrals() const {return 2;}
 	virtual double* CalcMultipleIntegrals();
 
+	//! Access the precomputed mode distribution for field component 0 (nyP) or 1 (nyPP).
+	//! Valid only after InitProcess() has been called.
+	const double* const* GetModeDist(int component) const { return m_ModeDist[component]; }
+
+	//! Fill \p lines with the number of grid lines in each transverse dimension.
+	void GetNumLines(unsigned int lines[2]) const { lines[0] = m_numLines[0]; lines[1] = m_numLines[1]; }
+
 protected:
 	//normal direction of the mode plane
 	int m_ny;

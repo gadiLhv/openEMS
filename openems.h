@@ -181,6 +181,11 @@ protected:
 	//! Setup local absorbing boundary conditions
 	void SetupAbsorbingSheets();
 
+	//! For any MODAL absorbers found during SetupAbsorbingSheets(), create the two
+	//! ProcessModeMatch integrals (E and H) and wire them to their Engine_Ext_Absorbing_BC.
+	//! Must be called after both CreateEngine() and SetupProcessing() have completed.
+	void SetupModalAbsorbProcessing();
+
 	//! Check whether or not the FDTD-Operator has to store material data.
 	bool SetupMaterialStorages();
 

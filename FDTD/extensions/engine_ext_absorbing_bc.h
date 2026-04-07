@@ -26,6 +26,7 @@
 
 class Operator_Ext_Absorbing_BC;
 class Engine_Interface_FDTD;
+class ProcessModeMatch;
 
 class Engine_Ext_Absorbing_BC : public Engine_Extension
 {
@@ -50,6 +51,14 @@ public:
 	virtual void Apply2Current(int threadID);
 
 	void SetEngineInterface(Engine_Interface_FDTD* eng_if) {m_Eng_Interface=eng_if;}
+
+	//! Wire the two mode-match processings for modal absorption.
+	//! Must be called after both the engine and ProcessingArray are set up.
+	void SetModeMatchProcessings(ProcessModeMatch* pmm_E, ProcessModeMatch* pmm_H)
+	{
+		m_PMM_E = pmm_E;
+		m_PMM_H = pmm_H;
+	}
 
 protected:
 	Operator_Ext_Absorbing_BC* m_Op_ABC;
@@ -102,8 +111,13 @@ protected:
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_I_nyP;	// Storage for currents, direction n + 1
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_I_nyPP;	// Storage for currents, direction n + 2
 
-	Engine_Interface_FDTD* 	m_Eng_Interface_E,	// Container for E-Field mode match process
-							m_Eng_Interface_H;	// Container for H-field mode match process
+	ProcessModeMatch*		m_PMM_E;	// Mode match integral for E-field (set via SetModeMatchProcessings)
+	ProcessModeMatch*		m_PMM_H;	// Mode match integral for H-field (set via SetModeMatchProcessings)
+
+	// Modal absorber state
+	double		m_Zw;			// Wave impedance of the mode (Ohms)
+	int			m_normalSign;	// +1 if normalSignPositive, -1 otherwise
+	double		m_Hmm_prev;		// H mode-match value from the previous half-timestep (for time averaging)
 
 
 };
