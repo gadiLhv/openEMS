@@ -51,8 +51,8 @@ public:
 	bool		GetFieldSourceIsFile() {return m_FieldSourceIsFile;};
 	void		SetFieldSourceIsFile(bool isFile) {m_FieldSourceIsFile = isFile;};
 
-	virtual int GetNumberOfIntegrals() const {return 2;}
-	virtual double* CalcMultipleIntegrals();
+	virtual int		GetNumberOfIntegrals() const {return 2;}
+	virtual double*	CalcMultipleIntegrals();
 
 	//! Access the precomputed mode distribution for field component 0 (nyP) or 1 (nyPP).
 	//! Valid only after InitProcess() has been called.
@@ -67,13 +67,8 @@ protected:
 
 	int m_ModeFieldType;
 
-	double GetField(int ny, const unsigned int pos[3]);
-	double GetEField(int ny, const unsigned int pos[3]);
-	double GetHField(int ny, const unsigned int pos[3]);
-
 	std::string m_ModeFunction[3];
 	CSFunctionParser* m_ModeParser[2];
-
 
 	std::string m_ModeFileName;
 	bool		m_FieldSourceIsFile;

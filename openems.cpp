@@ -1040,7 +1040,6 @@ bool openEMS::Parse_XML_FDTDSetup(TiXmlElement* FDTD_Opts)
 	return true;
 }
 
-
 bool openEMS::Write2XML(TiXmlNode* rootNode)
 {
 	TiXmlElement main("openEMS");

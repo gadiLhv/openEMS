@@ -114,6 +114,8 @@ protected:
 	ProcessModeMatch*		m_PMM_E;	// Mode match integral for E-field (set via SetModeMatchProcessings)
 	ProcessModeMatch*		m_PMM_H;	// Mode match integral for H-field (set via SetModeMatchProcessings)
 
+	Engine_Interface_FDTD* m_Eng_Interface;
+
 	// Modal absorber state
 	double		m_Zw;			// Wave impedance of the mode (Ohms)
 	int			m_normalSign;	// +1 if normalSignPositive, -1 otherwise
