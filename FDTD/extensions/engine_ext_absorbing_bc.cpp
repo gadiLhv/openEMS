@@ -16,16 +16,22 @@
 */
 
 
-/* This version of absorbing boundary conditions is based on this article:
+/* This version of absorbing boundary conditions is based on these articles:
  *
- * Betz, Vaughn Timothy, and R. Mittra. "Absorbing boundary conditions for the finite-difference time-domain analysis of guided-wave structures." Coordinated Science Laboratory Report no. UILU-ENG-93-2243 (1993).
+ * [1] Betz, Vaughn Timothy, and R. Mittra. "Absorbing boundary conditions for the
+ *     finite-difference time-domain analysis of guided-wave structures."
+ *     Coordinated Science Laboratory Report no. UILU-ENG-93-2243 (1993).
+ * [2] Y. Mao, A. Z. Elsherbeni, S. Li, T. Jiang, "Surface Impedance Absorbing
+ *     Boundary for Terminating FDTD Simulations," ACES Journal, vol. 29, no. 12,
+ *     pp. 1035-1046, 2014.
  *
- * After some trial and error, it was discovered that the simplest and most efficient implementations
- * are:
- * 1. Mur first order boundary conditions
- * 2. First order Mur with "super-absorption".
- * Later I discovered that the latter is equivalent to the so-called "Surface impedance boundary
- * conditions" (SIBC).
+ * The implementations:
+ *   1. Mur first order boundary conditions ([1])
+ *   2. First order Mur with "super-absorption" ([1])
+ *   3. Surface Impedance Absorbing BC (SIBC, Leontovich) ([2])
+ * For SIBC only the tangential H on the boundary plane is replaced with a
+ * modified update, using I^(n-1/2) stashed in DoPreCurrentUpdates and the
+ * newly updated V values. The voltage hooks are no-ops for this type.
  */
 
 
@@ -42,7 +48,9 @@ Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_e
 	m_K1_nyP(op_ext->m_K1_nyP),
 	m_K1_nyPP(op_ext->m_K1_nyPP),
 	m_K2_nyP(op_ext->m_K2_nyP),
-	m_K2_nyPP(op_ext->m_K2_nyPP)
+	m_K2_nyPP(op_ext->m_K2_nyPP),
+	m_K3_nyP(op_ext->m_K3_nyP),
+	m_K3_nyPP(op_ext->m_K3_nyPP)
 {
 
 	m_Op_ABC = op_ext;
@@ -71,6 +79,15 @@ Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_e
 	// Initialize shifted position for I. Different for super-absorption
 	m_pos_ny0_I = m_posStart[m_ny] + (normalSignPositive ? 0 : -1);
 	m_pos_ny0_shift_I = m_posStart[m_ny] + (normalSignPositive ? 1 : -2);
+
+	// SIBC sign conventions follow from the curl in Maxwell-Faraday and the
+	// Leontovich relation E_tang = Z * (n_hat x H). C-term signs are determined
+	// purely by the right-handed cyclic order (ny, nyP, nyPP); B-term signs flip
+	// with the outward normal direction.
+	m_sibc_sign_B_nyP  = normalSignPositive ? +1.0 : -1.0;
+	m_sibc_sign_B_nyPP = -m_sibc_sign_B_nyP;
+	m_sibc_sign_C_nyP  = -1.0;
+	m_sibc_sign_C_nyPP = +1.0;
 
 	m_V_nyP.Init("volt_nyP",m_numLines);
 	m_V_nyPP.Init("volt_nyPP",m_numLines);
@@ -115,6 +132,10 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 	if (threadID >= m_NrThreads)
 		return;
 
+	// SIBC only modifies the H-update on the boundary plane; voltage hooks are no-ops.
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) == Operator_Ext_Absorbing_BC::SIBC)
+		return;
+
 	unsigned int pos[] = {0,0,0};
 	unsigned int pos_shift[] = {0,0,0};
 
@@ -150,6 +171,10 @@ void Engine_Ext_Absorbing_BC::DoPostVoltageUpdatesImpl(EngType* eng, int threadI
 	if (m_Eng==NULL) return;
 
 	if (threadID >= m_NrThreads)
+		return;
+
+	// SIBC only modifies the H-update on the boundary plane; voltage hooks are no-ops.
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) == Operator_Ext_Absorbing_BC::SIBC)
 		return;
 
 	unsigned int pos_shift[] = {0,0,0};
@@ -188,6 +213,10 @@ void Engine_Ext_Absorbing_BC::Apply2VoltagesImpl(EngType* eng, int threadID)
 	if (threadID >= m_NrThreads)
 		return;
 
+	// SIBC only modifies the H-update on the boundary plane; voltage hooks are no-ops.
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) == Operator_Ext_Absorbing_BC::SIBC)
+		return;
+
 	unsigned int pos[] = {0,0,0};
 
 	pos[m_ny] = m_posStart[m_ny];
@@ -223,13 +252,40 @@ void Engine_Ext_Absorbing_BC::DoPreCurrentUpdatesImpl(EngType* eng, int threadID
 	if (threadID >= m_NrThreads)
 		return;
 
-	unsigned int 	pos[] = {0,0,0},
-					pos_shift[] = {0,0,0};
+	Operator_Ext_Absorbing_BC::ABCtype abc_type = (Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype);
 
+	// SIBC: stash I^(n-1/2) at the boundary plane so we can apply the
+	// modified update in Apply2Current after the engine has run its own step.
+	if (abc_type == Operator_Ext_Absorbing_BC::SIBC)
+	{
+		unsigned int pos[] = {0,0,0};
+
+		unsigned int numLine_1 = std::min<unsigned int>(
+			m_threadStartLine.at(threadID) + m_linesPerThread.at(threadID),
+			m_numLines[0] - 1
+		);
+		unsigned int numLine_0 = m_threadStartLine.at(threadID);
+
+		pos[m_ny] = m_pos_ny0_I;
+		for (unsigned int i = numLine_0 ; i < numLine_1 ; i++)
+		{
+			pos[m_nyP] = m_posStart[m_nyP] + i;
+			for (unsigned int j = 0; j < (m_numLines[1] - 1); j++)
+			{
+				pos[m_nyPP] = m_posStart[m_nyPP] + j;
+				m_I_nyP (i,j) = eng->EngType::GetCurr(m_nyP , pos);
+				m_I_nyPP(i,j) = eng->EngType::GetCurr(m_nyPP, pos);
+			}
+		}
+		return;
+	}
 
 	// If this isn't the appropriate boundary type, move on to the next primitive
-	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
+	if (abc_type != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
 		return;
+
+	unsigned int 	pos[] = {0,0,0},
+					pos_shift[] = {0,0,0};
 
 	// For magnetic field, -1, due to dual grid
 	unsigned int numLines_1 = std::min(
@@ -285,6 +341,11 @@ void Engine_Ext_Absorbing_BC::DoPostCurrentUpdatesImpl(EngType* eng, int threadI
 
 	unsigned int pos_shift[] = {0,0,0};
 
+	// SIBC needs no Post hook; the update is done in Apply2Current using the
+	// I^(n-1/2) snapshot stashed in DoPreCurrentUpdates.
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) == Operator_Ext_Absorbing_BC::SIBC)
+		return;
+
 	// If this isn't the appropriate boundary type, move on to the next primitive
 	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
 		return;
@@ -328,11 +389,78 @@ void Engine_Ext_Absorbing_BC::Apply2CurrentImpl(EngType* eng, int threadID)
 	if (threadID >= m_NrThreads)
 		return;
 
-	unsigned int pos[] = {0,0,0};
+	Operator_Ext_Absorbing_BC::ABCtype abc_type = (Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype);
+
+	// SIBC: overwrite the H values at the boundary with the modified update
+	// I^(n+1/2) = K1*I^(n-1/2)
+	//             + sign_B * K2 * V_normal(at_inside)
+	//             + sign_C * K3 * [V_normal(curl_dir + 1) - V_normal(curl_dir)]
+	// (V/I have openEMS length factors baked into K2, K3 in the operator.)
+	if (abc_type == Operator_Ext_Absorbing_BC::SIBC)
+	{
+		unsigned int pos[] = {0,0,0};
+		unsigned int pos_inside[] = {0,0,0};
+		unsigned int pos_curl[] = {0,0,0};
+
+		unsigned int numLine_1 = std::min<unsigned int>(
+			m_threadStartLine.at(threadID) + m_linesPerThread.at(threadID),
+			m_numLines[0] - 1
+		);
+		unsigned int numLine_0 = m_threadStartLine.at(threadID);
+
+		pos       [m_ny] = m_pos_ny0_I;
+		pos_inside[m_ny] = m_pos_ny0_shift_V;
+		pos_curl  [m_ny] = m_pos_ny0_I;
+
+		for (unsigned int i = numLine_0 ; i < numLine_1 ; i++)
+		{
+			pos       [m_nyP] = m_posStart[m_nyP] + i;
+			pos_inside[m_nyP] = m_posStart[m_nyP] + i;
+			pos_curl  [m_nyP] = m_posStart[m_nyP] + i;
+
+			for (unsigned int j = 0; j < (m_numLines[1] - 1); j++)
+			{
+				pos       [m_nyPP] = m_posStart[m_nyPP] + j;
+				pos_inside[m_nyPP] = m_posStart[m_nyPP] + j;
+				pos_curl  [m_nyPP] = m_posStart[m_nyPP] + j;
+
+				// Curl of E_normal:
+				// H_nyP  uses dV_ny / d(nyPP) -- step nyPP
+				// H_nyPP uses dV_ny / d(nyP)  -- step nyP
+				unsigned int pos_curl_nyP_step[3]  = {pos_curl[0], pos_curl[1], pos_curl[2]};
+				unsigned int pos_curl_nyPP_step[3] = {pos_curl[0], pos_curl[1], pos_curl[2]};
+				pos_curl_nyP_step [m_nyPP] += 1;
+				pos_curl_nyPP_step[m_nyP ] += 1;
+
+				FDTD_FLOAT V_norm_inside_for_nyP  = eng->EngType::GetVolt(m_nyPP, pos_inside);
+				FDTD_FLOAT V_norm_inside_for_nyPP = eng->EngType::GetVolt(m_nyP , pos_inside);
+
+				FDTD_FLOAT V_ny_at_curl  = eng->EngType::GetVolt(m_ny, pos_curl);
+				FDTD_FLOAT dV_ny_along_nyPP = eng->EngType::GetVolt(m_ny, pos_curl_nyP_step ) - V_ny_at_curl;
+				FDTD_FLOAT dV_ny_along_nyP  = eng->EngType::GetVolt(m_ny, pos_curl_nyPP_step) - V_ny_at_curl;
+
+				FDTD_FLOAT I_nyP_new =
+					  m_K1_nyP(i,j) * m_I_nyP(i,j)
+					+ m_sibc_sign_B_nyP * m_K2_nyP(i,j) * V_norm_inside_for_nyP
+					+ m_sibc_sign_C_nyP * m_K3_nyP(i,j) * dV_ny_along_nyPP;
+
+				FDTD_FLOAT I_nyPP_new =
+					  m_K1_nyPP(i,j) * m_I_nyPP(i,j)
+					+ m_sibc_sign_B_nyPP * m_K2_nyPP(i,j) * V_norm_inside_for_nyPP
+					+ m_sibc_sign_C_nyPP * m_K3_nyPP(i,j) * dV_ny_along_nyP;
+
+				eng->EngType::SetCurr(m_nyP , pos, I_nyP_new);
+				eng->EngType::SetCurr(m_nyPP, pos, I_nyPP_new);
+			}
+		}
+		return;
+	}
 
 	// If this isn't the appropriate boundary type, move on to the next primitive
-	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
+	if (abc_type != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
 		return;
+
+	unsigned int pos[] = {0,0,0};
 
 	// For magnetic field, -1, due to dual grid
 	unsigned int numLine_1 = std::min<unsigned int>(

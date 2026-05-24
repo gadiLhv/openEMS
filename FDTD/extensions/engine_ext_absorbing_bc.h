@@ -93,11 +93,21 @@ protected:
 	ArrayLib::ArrayIJ<FDTD_FLOAT>&	m_K1_nyPP;	// Copy of second set of coefficients, direction n + 2
 	ArrayLib::ArrayIJ<FDTD_FLOAT>&	m_K2_nyP;	// Copy of first set of coefficients, direction n + 1
 	ArrayLib::ArrayIJ<FDTD_FLOAT>&	m_K2_nyPP;	// Copy of second set of coefficients, direction n + 2
+	ArrayLib::ArrayIJ<FDTD_FLOAT>&	m_K3_nyP;	// SIBC only: curl-term coefficient, direction n + 1
+	ArrayLib::ArrayIJ<FDTD_FLOAT>&	m_K3_nyPP;	// SIBC only: curl-term coefficient, direction n + 2
 
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_V_nyP;	// Storage for voltage, direction n + 1
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_V_nyPP;	// Storage for voltage, direction n + 2
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_I_nyP;	// Storage for currents, direction n + 1
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_I_nyPP;	// Storage for currents, direction n + 2
+
+	// SIBC sign multipliers for the B and C update terms. The B sign depends on
+	// the outward normal direction; the C signs follow the right-handed cyclic
+	// order (ny, nyP, nyPP) and are therefore fixed.
+	FDTD_FLOAT		m_sibc_sign_B_nyP;
+	FDTD_FLOAT		m_sibc_sign_B_nyPP;
+	FDTD_FLOAT		m_sibc_sign_C_nyP;
+	FDTD_FLOAT		m_sibc_sign_C_nyPP;
 
 
 };

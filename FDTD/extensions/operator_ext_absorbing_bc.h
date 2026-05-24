@@ -19,14 +19,19 @@
  * The localized boundary conditions currently implemented are denoted:
  * - First order Mur BC, single phased velocity
  * - First order Mur BC with super absorption, single phase velocity.
- * These were chosen after experimentation with the various boundary
+ * - Surface Impedance Absorbing Boundary Condition (Leontovich), SIBC.
+ * The Mur variants were chosen after experimentation with the various boundary
  * conditions suggested in [1]. The amount of post processing and
  * absorption performance pointed towards the Single PV 1st order Mur.
  * Since this method also requires an extra mesh cell in the doublet grid,
  * the option to use the regular 1st order Mur was left available.
+ * The SIBC follows the formulation in [2] -- only the tangential H on the
+ * boundary plane is modified; tangential E on the boundary is assumed zero
+ * (as it is for the outer face of a PEC-terminated grid).
  *
  * References:
  * [1] Betz, Vaughn Timothy, and R. Mittra. "Absorbing boundary conditions for the finite-difference time-domain analysis of guided-wave structures." Coordinated Science Laboratory Report no. UILU-ENG-93-2243 (1993).‏
+ * [2] Y. Mao, A. Z. Elsherbeni, S. Li, T. Jiang, "Surface Impedance Absorbing Boundary for Terminating FDTD Simulations," ACES Journal, vol. 29, no. 12, pp. 1035-1046, 2014.
  */
 
 
@@ -50,7 +55,8 @@ public:
 	{
 		UNDEFINED	= 0,
 		MUR_1ST 	= 1,	// Mur's BC, 1st order
-		MUR_1ST_SA 	= 2		// Mur's BC, 1st order, with Super Absorption
+		MUR_1ST_SA 	= 2,	// Mur's BC, 1st order, with Super Absorption
+		SIBC		= 3		// Surface Impedance Absorbing BC (Leontovich)
 	};
 
 	Operator_Ext_Absorbing_BC(Operator* op);
@@ -99,11 +105,21 @@ protected:
 
 	double			m_phaseVelocity;
 
+	// SIBC: user-specified surface impedance (Ohm). 0 means "derive Z = sqrt(mu/eps)
+	// per cell from the local material".
+	double			m_surfaceImpedance;
+
 	// Coefficients, to be initialized on-demand.
+	// Mur/MurSA usage: K1 = (vp*dt - delta)/(vp*dt + delta), K2 = vp*dt/delta (SA only).
+	// SIBC usage:      K1 = (1 - beta)/(1 + beta),
+	//                  K2 = (2*dt/(mu*delta_ny)) / (1 + beta),
+	//                  K3 = (dt/(mu*delta_tang)) / (1 + beta),  beta = dt*Z/(mu*delta_ny).
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_K1_nyP;
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_K1_nyPP;
 	ArrayLib::ArrayIJ<FDTD_FLOAT> 	m_K2_nyP;
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_K2_nyPP;
+	ArrayLib::ArrayIJ<FDTD_FLOAT> 	m_K3_nyP;
+	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_K3_nyPP;
 
 
 
