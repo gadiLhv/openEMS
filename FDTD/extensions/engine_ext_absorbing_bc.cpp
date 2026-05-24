@@ -31,9 +31,9 @@
 
 #include "engine_ext_absorbing_bc.h"
 #include "operator_ext_absorbing_bc.h"
-#include "Common/processmodematch.h"
 #include "FDTD/engine.h"
 #include "FDTD/engine_sse.h"
+#include "FDTD/engine_interface_fdtd.h"
 #include "tools/array_ops.h"
 #include "tools/useful.h"
 #include "operator_ext_excitation.h"
@@ -49,8 +49,7 @@ Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_e
 	m_Op_ABC = op_ext;
 	m_ABCtype = int(m_Op_ABC->m_ABCtype);
 
-	m_PMM_E = nullptr;
-	m_PMM_H = nullptr;
+	m_Eng_Interface = NULL;
 
 	for (unsigned int dimIdx = 0 ; dimIdx < 3 ; dimIdx++)
 	{
@@ -123,6 +122,75 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 	if (threadID >= m_NrThreads)
 		return;
 
+	// Modal absorber: subtract the outgoing modal component from V and I at
+	// the absorber plane. Runs on thread 0 only (no transverse parallelism for
+	// the modal path). The Mur stencil below is skipped for MODAL.
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) == Operator_Ext_Absorbing_BC::MODAL)
+	{
+		if (threadID != 0) return;
+		if (m_Eng_Interface == NULL) return;
+		if (m_Zw <= 0.0) return;
+
+		// Mode-match scalars, computed by the PMMs in PA at end of previous iter.
+		double Emm      = m_Eng_Interface->GetLastModeMatchE();
+		double Hmm_curr = m_Eng_Interface->GetLastModeMatchH();
+
+		// Time-centre H against E (H sample lags by half a step).
+		double Hmm  = 0.5 * (m_Hmm_prev + Hmm_curr);
+		m_Hmm_prev  = Hmm_curr;
+
+		// Modal amplitude of the wave leaving the domain through this absorber:
+		//   normalSign = +1 (outward normal +ny): outgoing wave is a_pos = 0.5*(Emm + Zw*Hmm)
+		//   normalSign = -1 (outward normal -ny): outgoing wave is a_neg = 0.5*(Emm - Zw*Hmm)
+		double a = 0.5 * (Emm + m_normalSign * m_Zw * Hmm);
+
+		const Operator* op = m_Op_ABC->m_Op;
+
+		unsigned int numLinesE_P  = m_Eng_Interface->GetModeMatchE_NumLines(0);
+		unsigned int numLinesE_PP = m_Eng_Interface->GetModeMatchE_NumLines(1);
+		unsigned int numLinesH_P  = m_Eng_Interface->GetModeMatchH_NumLines(0);
+		unsigned int numLinesH_PP = m_Eng_Interface->GetModeMatchH_NumLines(1);
+
+		// V correction at the E plane: V_comp -= a * modeE[comp][i][j] * EdgeLength_comp
+		unsigned int pos_v[] = {0,0,0};
+		pos_v[m_ny] = m_posStart[m_ny];
+		for (unsigned int i = 0; i < numLinesE_P; ++i)
+		{
+			pos_v[m_nyP] = m_posStart[m_nyP] + i;
+			for (unsigned int j = 0; j < numLinesE_PP; ++j)
+			{
+				pos_v[m_nyPP] = m_posStart[m_nyPP] + j;
+				double el_nyP  = op->GetEdgeLength(m_nyP,  pos_v, false);
+				double el_nyPP = op->GetEdgeLength(m_nyPP, pos_v, false);
+				eng->EngType::SetVolt(m_nyP,  pos_v, eng->EngType::GetVolt(m_nyP,  pos_v) - a * m_Eng_Interface->GetModeDistE(0, i, j) * el_nyP);
+				eng->EngType::SetVolt(m_nyPP, pos_v, eng->EngType::GetVolt(m_nyPP, pos_v) - a * m_Eng_Interface->GetModeDistE(1, i, j) * el_nyPP);
+			}
+		}
+
+		// I correction at the H plane: I_comp -= normalSign * (a/Zw) * modeH[comp][i][j] * EdgeLength_comp_dual
+		double dH_factor = m_normalSign * a / m_Zw;
+		unsigned int pos_i[] = {0,0,0};
+		pos_i[m_ny] = m_pos_ny0_I;
+		for (unsigned int i = 0; i < numLinesH_P; ++i)
+		{
+			pos_i[m_nyP] = m_posStart[m_nyP] + i;
+			for (unsigned int j = 0; j < numLinesH_PP; ++j)
+			{
+				pos_i[m_nyPP] = m_posStart[m_nyPP] + j;
+				double el_nyP_d  = op->GetEdgeLength(m_nyP,  pos_i, true);
+				double el_nyPP_d = op->GetEdgeLength(m_nyPP, pos_i, true);
+				eng->EngType::SetCurr(m_nyP,  pos_i, eng->EngType::GetCurr(m_nyP,  pos_i) - dH_factor * m_Eng_Interface->GetModeDistH(0, i, j) * el_nyP_d);
+				eng->EngType::SetCurr(m_nyPP, pos_i, eng->EngType::GetCurr(m_nyPP, pos_i) - dH_factor * m_Eng_Interface->GetModeDistH(1, i, j) * el_nyPP_d);
+			}
+		}
+		return;
+	}
+
+	// Bail out for any other non-Mur ABC type (defensive).
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST
+	 && (Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
+		return;
+
 	unsigned int pos[] = {0,0,0};
 	unsigned int pos_shift[] = {0,0,0};
 
@@ -160,6 +228,11 @@ void Engine_Ext_Absorbing_BC::DoPostVoltageUpdatesImpl(EngType* eng, int threadI
 	if (threadID >= m_NrThreads)
 		return;
 
+	// Mur-only step; modal absorber does not participate here.
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST
+	 && (Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
+		return;
+
 	unsigned int pos_shift[] = {0,0,0};
 
 	pos_shift[m_ny] = m_pos_ny0_shift_V;
@@ -194,6 +267,11 @@ void Engine_Ext_Absorbing_BC::Apply2VoltagesImpl(EngType* eng, int threadID)
 	if (m_Eng==NULL) return;
 
 	if (threadID >= m_NrThreads)
+		return;
+
+	// Mur-only step; modal absorber does not participate here.
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST
+	 && (Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
 		return;
 
 	unsigned int pos[] = {0,0,0};
@@ -338,96 +416,31 @@ void Engine_Ext_Absorbing_BC::Apply2CurrentImpl(EngType* eng, int threadID)
 
 	unsigned int pos[] = {0,0,0};
 
-	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) == Operator_Ext_Absorbing_BC::MUR_1ST_SA)
-	{
-		// For magnetic field, -1, due to dual grid
-		unsigned int numLine_1 = std::min<unsigned int>(
-			m_threadStartLine.at(threadID) + m_linesPerThread.at(threadID),
-			m_numLines[0] - 1
-		);
-		unsigned int numLine_0 = m_threadStartLine.at(threadID);
-
-		pos[m_ny] = m_pos_ny0_I;
-		for (unsigned int i = numLine_0 ; i < numLine_1 ; i++)
-		{
-			// Store shifted location in this container
-			pos[m_nyP] = m_posStart[m_nyP] + i;
-			for (unsigned int j = 0; j < (m_numLines[1] - 1); j++)
-			{
-				pos[m_nyPP] = m_posStart[m_nyPP] + j;
-
-				// H(i + s,n) = (Hsa*K2 + Hc)/(1 + K2)
-				eng->EngType::SetCurr(m_nyP ,pos, (m_I_nyP (i,j)*m_K2_nyP (i,j) + eng->EngType::GetCurr(m_nyP ,pos))/(m_K2_nyP (i,j) + 1.0));
-				eng->EngType::SetCurr(m_nyPP,pos, (m_I_nyPP(i,j)*m_K2_nyPP(i,j) + eng->EngType::GetCurr(m_nyPP,pos))/(m_K2_nyPP(i,j) + 1.0));
-			}
-		}
+	// Super-absorption is the only ABC type that touches currents here. Skip
+	// for plain Mur and for the modal absorber (the latter does its work in
+	// DoPreVoltageUpdatesImpl).
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
 		return;
-	}
 
-	// Modal absorber: only thread 0 computes (no transverse parallelism here)
-	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MODAL)
-		return;
-	if (threadID != 0) return;
-	if (m_PMM_E == nullptr || m_PMM_H == nullptr) return;
-	if (m_Zw == 0.0) return;
+	// For magnetic field, -1, due to dual grid
+	unsigned int numLine_1 = std::min<unsigned int>(
+		m_threadStartLine.at(threadID) + m_linesPerThread.at(threadID),
+		m_numLines[0] - 1
+	);
+	unsigned int numLine_0 = m_threadStartLine.at(threadID);
 
-	// --- Mode match integrals ---
-	// E is at timestep n+1 (already updated), H is at n+1/2 (just updated).
-	double Emm       = m_PMM_E->CalcMultipleIntegrals()[0];
-	double Hmm_curr  = m_PMM_H->CalcMultipleIntegrals()[0];
-
-	// Time-average H over two half-steps: aligns H at n with E at n+1 (best-effort sync).
-	double Hmm = 0.5 * (m_Hmm_prev + Hmm_curr);
-	m_Hmm_prev = Hmm_curr;
-
-	// Wave amplitude propagating towards this absorber face.
-	// normalSign = +1: absorber at high end, wave travels in +ny → absorb a_pos.
-	// normalSign = -1: absorber at low end,  wave travels in -ny → absorb a_neg.
-	double a = 0.5 * (Emm + m_normalSign * Hmm * m_Zw);
-
-	// --- Accessors for the precomputed mode distributions ---
-	unsigned int numLinesE[2], numLinesH[2];
-	m_PMM_E->GetNumLines(numLinesE);
-	m_PMM_H->GetNumLines(numLinesH);
-
-	const double* const* modeDist_E_nyP  = m_PMM_E->GetModeDist(0);
-	const double* const* modeDist_E_nyPP = m_PMM_E->GetModeDist(1);
-	const double* const* modeDist_H_nyP  = m_PMM_H->GetModeDist(0);
-	const double* const* modeDist_H_nyPP = m_PMM_H->GetModeDist(1);
-
-	const Operator* op = m_Op_ABC->m_Op;
-
-	// --- Correct E-field voltages at the absorber plane ---
-	// ΔV_comp = -a * modeDist[comp][i][j] * EdgeLength_comp
-	pos[m_ny] = m_posStart[m_ny];
-	for (unsigned int i = 0; i < numLinesE[0]; ++i)
-	{
-		pos[m_nyP] = m_posStart[m_nyP] + i;
-		for (unsigned int j = 0; j < numLinesE[1]; ++j)
-		{
-			pos[m_nyPP] = m_posStart[m_nyPP] + j;
-			double el_nyP  = op->GetEdgeLength(m_nyP,  pos, false);
-			double el_nyPP = op->GetEdgeLength(m_nyPP, pos, false);
-			eng->EngType::SetVolt(m_nyP,  pos, eng->EngType::GetVolt(m_nyP,  pos) - a * modeDist_E_nyP [i][j] * el_nyP);
-			eng->EngType::SetVolt(m_nyPP, pos, eng->EngType::GetVolt(m_nyPP, pos) - a * modeDist_E_nyPP[i][j] * el_nyPP);
-		}
-	}
-
-	// --- Correct H-field currents at m_pos_ny0_I ---
-	// H correction: -normalSign * a/Zw * modeDist_H * EdgeLength_dual
-	// ΔI_comp = -normalSign * a/Zw * modeDist_H[comp][i][j] * EdgeLength_comp_dual
-	double dH_factor = m_normalSign * a / m_Zw;
 	pos[m_ny] = m_pos_ny0_I;
-	for (unsigned int i = 0; i < numLinesH[0]; ++i)
+	for (unsigned int i = numLine_0 ; i < numLine_1 ; i++)
 	{
+		// Store shifted location in this container
 		pos[m_nyP] = m_posStart[m_nyP] + i;
-		for (unsigned int j = 0; j < numLinesH[1]; ++j)
+		for (unsigned int j = 0; j < (m_numLines[1] - 1); j++)
 		{
 			pos[m_nyPP] = m_posStart[m_nyPP] + j;
-			double el_nyP_d  = op->GetEdgeLength(m_nyP,  pos, true);
-			double el_nyPP_d = op->GetEdgeLength(m_nyPP, pos, true);
-			eng->EngType::SetCurr(m_nyP,  pos, eng->EngType::GetCurr(m_nyP,  pos) - dH_factor * modeDist_H_nyP [i][j] * el_nyP_d);
-			eng->EngType::SetCurr(m_nyPP, pos, eng->EngType::GetCurr(m_nyPP, pos) - dH_factor * modeDist_H_nyPP[i][j] * el_nyPP_d);
+
+			// H(i + s,n) = (Hsa*K2 + Hc)/(1 + K2)
+			eng->EngType::SetCurr(m_nyP ,pos, (m_I_nyP (i,j)*m_K2_nyP (i,j) + eng->EngType::GetCurr(m_nyP ,pos))/(m_K2_nyP (i,j) + 1.0));
+			eng->EngType::SetCurr(m_nyPP,pos, (m_I_nyPP(i,j)*m_K2_nyPP(i,j) + eng->EngType::GetCurr(m_nyPP,pos))/(m_K2_nyPP(i,j) + 1.0));
 		}
 	}
 }

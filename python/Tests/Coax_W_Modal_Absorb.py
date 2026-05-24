@@ -146,7 +146,7 @@ modal_abs = FDTD.AddModalAbsorber(abs_start, abs_stop, 'z',
                                    E_file="Coax_Er.csv",
                                    H_file="Coax_Hr.csv",
                                    normal_positive=False,
-                 2                  Zw=238.26517157)
+                                   Zw=238.26517157)
 
 # ## Run the simulation
 if display_structure:

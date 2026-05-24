@@ -474,31 +474,66 @@ void openEMS::SetupModalAbsorbProcessing()
 			continue;
 		}
 
+		// Wave impedance is mandatory for MODAL absorbers. The CSXCAD-side
+		// default is a negative sentinel; flag callers who forgot to set it.
+		if (op_ext->GetZw() <= 0.0)
+		{
+			cerr << "openEMS::SetupModalAbsorbProcessing(): Error: Modal absorber sheet " << i
+			     << " has invalid wave impedance Zw=" << op_ext->GetZw()
+			     << " (must be > 0). Set it via AddModalAbsorber(..., Zw=<ohms>)." << endl;
+			continue;
+		}
+
+		double sheetStart[3], sheetStop[3];
+		op_ext->GetSheetBoundingBox(sheetStart, sheetStop);
+
 		// Create E-field mode match integral (field type 0).
 		ProcessModeMatch* pmm_E = new ProcessModeMatch(NewEngineInterface());
 		pmm_E->SetFieldType(0);
 		pmm_E->GetNormalDir(op_ext->GetNy());
 		pmm_E->SetProcessInterval(1);
-		pmm_E->DefineStartStopCoord(op_ext->m_dSheetStart, op_ext->m_dSheetStop);
+		pmm_E->DefineStartStopCoord(sheetStart, sheetStop);
 		if (!op_ext->GetEModeFileName().empty())
 			pmm_E->SetModeFileName(op_ext->GetEModeFileName());
 		PA->AddProcessing(pmm_E);
 
 		// Create H-field mode match integral (field type 1).
 		// H-field lives on the dual mesh and is evaluated at half-integer timesteps.
+		// NOTE: bounding box matches the E-plane for now; indexing offset along
+		// the normal direction to land on the actual Yee H-plane is TODO.
 		ProcessModeMatch* pmm_H = new ProcessModeMatch(NewEngineInterface());
 		pmm_H->SetFieldType(1);
 		pmm_H->SetDualTime(true);
 		pmm_H->SetDualMesh(true);
 		pmm_H->GetNormalDir(op_ext->GetNy());
 		pmm_H->SetProcessInterval(1);
-		pmm_H->DefineStartStopCoord(op_ext->m_dSheetStart, op_ext->m_dSheetStop);
+		pmm_H->DefineStartStopCoord(sheetStart, sheetStop);
 		if (!op_ext->GetHModeFileName().empty())
 			pmm_H->SetModeFileName(op_ext->GetHModeFileName());
 		PA->AddProcessing(pmm_H);
 
-		// Wire both integrals to the engine extension so it can read their results.
-		eng_ext->SetModeMatchProcessings(pmm_E, pmm_H);
+		// PMM::InitProcess is called from PA->PreProcess() later. We need
+		// the normalized mode distributions and num_lines available now so we
+		// can publish them through the engine interface. Force init here; the
+		// later PA->PreProcess() call will see them as already initialized.
+		pmm_E->InitProcess();
+		pmm_H->InitProcess();
+
+		unsigned int linesE[2], linesH[2];
+		pmm_E->GetNumLines(linesE);
+		pmm_H->GetNumLines(linesH);
+
+		// Build a dedicated engine interface for this absorber and publish the
+		// mode-match sources through it; the engine extension reads scalars and
+		// mode-distribution samples via this mediator only (no PMM dependency).
+		Engine_Interface_FDTD* eif = NewEngineInterface();
+		eif->SetModeMatchE_Source(pmm_E->GetResults(),
+		                          pmm_E->GetModeDist(0), pmm_E->GetModeDist(1),
+		                          linesE[0], linesE[1]);
+		eif->SetModeMatchH_Source(pmm_H->GetResults(),
+		                          pmm_H->GetModeDist(0), pmm_H->GetModeDist(1),
+		                          linesH[0], linesH[1]);
+		eng_ext->SetEngineInterface(eif);
 	}
 }
 

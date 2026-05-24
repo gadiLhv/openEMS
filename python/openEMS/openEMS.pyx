@@ -327,8 +327,8 @@ cdef class openEMS:
         return port
         
     def AddModalAbsorber(self, start, stop, p_dir, E_file, H_file,
-                         normal_positive=True, phase_velocity=None, Zw=None, priority=0):
-        """ AddModalAbsorber(start, stop, p_dir, E_file, H_file, normal_positive=True, phase_velocity=None, Zw=None, priority=0)
+                         normal_positive=True, phase_velocity=None, Zw=-1.0, priority=0):
+        """ AddModalAbsorber(start, stop, p_dir, E_file, H_file, normal_positive=True, phase_velocity=None, Zw=-1.0, priority=0)
 
         Add a modal absorbing boundary condition sheet.
 
@@ -351,9 +351,10 @@ cdef class openEMS:
             (wave travels in the positive p_dir direction).
         phase_velocity : float, optional
             Phase velocity override (m/s).  Uses C0 when omitted.
-        Zw : float, optional
-            Wave impedance of the mode in Ohms.  Required for modal absorption
-            to work correctly.
+        Zw : float
+            Wave impedance of the mode in Ohms.  Must be strictly positive;
+            the default (-1) is a sentinel that triggers a simulation-setup
+            error to flag callers who forgot to provide it.
         priority : int
             CSXCAD primitive priority.
 

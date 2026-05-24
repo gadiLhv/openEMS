@@ -54,9 +54,50 @@ public:
 
 	virtual double CalcFastEnergy() const;
 
+	//! Register the pointers a mode-match processing publishes.
+	//! Called once by openems.cpp during modal-absorber setup; lifetime of the
+	//! pointers is owned by the originating Processing.
+	void SetModeMatchE_Source(const double* integral,
+	                          const double* const* mode_nyP,
+	                          const double* const* mode_nyPP,
+	                          unsigned int numLines_nyP,
+	                          unsigned int numLines_nyPP);
+	void SetModeMatchH_Source(const double* integral,
+	                          const double* const* mode_nyP,
+	                          const double* const* mode_nyPP,
+	                          unsigned int numLines_nyP,
+	                          unsigned int numLines_nyPP);
+
+	//! Latest mode-match integral value, or 0 if no source was registered.
+	double GetLastModeMatchE() const
+	{ return m_ModeMatchE_integral ? *m_ModeMatchE_integral : 0.0; }
+	double GetLastModeMatchH() const
+	{ return m_ModeMatchH_integral ? *m_ModeMatchH_integral : 0.0; }
+
+	//! Sample the normalized mode distribution. component: 0=nyP, 1=nyPP.
+	double GetModeDistE(int component, unsigned int i, unsigned int j) const
+	{ const double* const* d = (component==0)?m_ModeDistE_nyP:m_ModeDistE_nyPP; return d ? d[i][j] : 0.0; }
+	double GetModeDistH(int component, unsigned int i, unsigned int j) const
+	{ const double* const* d = (component==0)?m_ModeDistH_nyP:m_ModeDistH_nyPP; return d ? d[i][j] : 0.0; }
+
+	//! Transverse-grid sizes used by the mode-match. axis: 0=nyP, 1=nyPP.
+	unsigned int GetModeMatchE_NumLines(int axis) const { return m_ModeMatchE_numLines[axis]; }
+	unsigned int GetModeMatchH_NumLines(int axis) const { return m_ModeMatchH_numLines[axis]; }
+
 protected:
 	Operator* m_Op;
 	Engine* m_Eng;
+
+	// Mode-match sources for modal absorbers. Pointers are not owned here.
+	const double*        m_ModeMatchE_integral;
+	const double* const* m_ModeDistE_nyP;
+	const double* const* m_ModeDistE_nyPP;
+	unsigned int         m_ModeMatchE_numLines[2];
+
+	const double*        m_ModeMatchH_integral;
+	const double* const* m_ModeDistH_nyP;
+	const double* const* m_ModeDistH_nyPP;
+	unsigned int         m_ModeMatchH_numLines[2];
 
 	//! Internal method to get an interpolated field of a given type. (0: E, 1: J, 2: rotH, 3: D)
 	virtual double* GetRawInterpolatedField(const unsigned int* pos, double* out, int type) const;

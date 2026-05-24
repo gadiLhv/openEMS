@@ -82,6 +82,12 @@ public:
 	std::string GetHModeFileName() const { return m_HModeFileName; }
 	double GetZw() const { return m_Zw; }
 
+	//! Copy the sheet bounding box (drawing units) into the caller's arrays.
+	void GetSheetBoundingBox(double start[3], double stop[3]) const
+	{
+		for (int n = 0; n < 3; ++n) { start[n] = m_dSheetStart[n]; stop[n] = m_dSheetStop[n]; }
+	}
+
 protected:
 
 	Operator_Ext_Absorbing_BC(Operator* op, Operator_Ext_Absorbing_BC* op_ext);

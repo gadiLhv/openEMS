@@ -79,6 +79,11 @@ void ProcessModeMatch::InitProcess()
 {
 	if (!Enabled) return;
 
+	// Idempotency guard: modal absorbers force-init us early to publish the
+	// mode distribution to their engine interface; PA->PreProcess() will then
+	// call us a second time and we must not reallocate or re-parse.
+	if (m_ModeDist[0] != NULL) return;
+
 	if (m_Eng_Interface==NULL)
 	{
 		cerr << "ProcessModeMatch::InitProcess: Error, Engine_Interface is NULL, abort mode matching..." << endl;

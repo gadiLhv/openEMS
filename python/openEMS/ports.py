@@ -561,7 +561,7 @@ class ModalAbsorber:
     """
 
     def __init__(self, CSX, start, stop, prop_dir, E_file, H_file,
-                 normal_positive=True, phase_velocity=None, Zw=None, priority=0):
+                 normal_positive=True, phase_velocity=None, Zw=-1.0, priority=0):
         from CSXCAD.CSProperties import ABCtype
 
         self.CSX = CSX
@@ -578,11 +578,10 @@ class ModalAbsorber:
             AbsorbingBoundaryType = ABCtype.MODAL,
             EModeFileName        = E_file,
             HModeFileName        = H_file,
+            WaveImpedance        = Zw,
         )
         if phase_velocity is not None:
             kw['PhaseVelocity'] = phase_velocity
-        if Zw is not None:
-            kw['WaveImpedance'] = Zw
 
         self.abc_prop = CSX.AddAbsorbingBC(prop_name, **kw)
         self.abc_prop.AddBox(start, stop, priority=priority)

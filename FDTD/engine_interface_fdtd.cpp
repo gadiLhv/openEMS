@@ -34,10 +34,48 @@ Engine_Interface_FDTD::Engine_Interface_FDTD(Operator* op) : Engine_Interface_Ba
 		cerr << "Engine_Interface_FDTD::Engine_Interface_FDTD: Error: Engine is not set! Exit!" << endl;
 		exit(1);
 	}
+
+	m_ModeMatchE_integral = NULL;
+	m_ModeDistE_nyP = NULL;
+	m_ModeDistE_nyPP = NULL;
+	m_ModeMatchE_numLines[0] = 0;
+	m_ModeMatchE_numLines[1] = 0;
+
+	m_ModeMatchH_integral = NULL;
+	m_ModeDistH_nyP = NULL;
+	m_ModeDistH_nyPP = NULL;
+	m_ModeMatchH_numLines[0] = 0;
+	m_ModeMatchH_numLines[1] = 0;
 }
 
 Engine_Interface_FDTD::~Engine_Interface_FDTD()
 {
+}
+
+void Engine_Interface_FDTD::SetModeMatchE_Source(const double* integral,
+                                                 const double* const* mode_nyP,
+                                                 const double* const* mode_nyPP,
+                                                 unsigned int numLines_nyP,
+                                                 unsigned int numLines_nyPP)
+{
+	m_ModeMatchE_integral = integral;
+	m_ModeDistE_nyP = mode_nyP;
+	m_ModeDistE_nyPP = mode_nyPP;
+	m_ModeMatchE_numLines[0] = numLines_nyP;
+	m_ModeMatchE_numLines[1] = numLines_nyPP;
+}
+
+void Engine_Interface_FDTD::SetModeMatchH_Source(const double* integral,
+                                                 const double* const* mode_nyP,
+                                                 const double* const* mode_nyPP,
+                                                 unsigned int numLines_nyP,
+                                                 unsigned int numLines_nyPP)
+{
+	m_ModeMatchH_integral = integral;
+	m_ModeDistH_nyP = mode_nyP;
+	m_ModeDistH_nyPP = mode_nyPP;
+	m_ModeMatchH_numLines[0] = numLines_nyP;
+	m_ModeMatchH_numLines[1] = numLines_nyPP;
 }
 
 double* Engine_Interface_FDTD::GetEField(const unsigned int* pos, double* out) const
