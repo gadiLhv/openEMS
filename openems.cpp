@@ -19,6 +19,7 @@
 #include <iomanip>
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include "tools/signal.h"
 #include "tools/useful.h"
 #include "FDTD/operator_cylinder.h"
@@ -487,8 +488,14 @@ void openEMS::SetupModalAbsorbProcessing()
 		double sheetStart[3], sheetStop[3];
 		op_ext->GetSheetBoundingBox(sheetStart, sheetStop);
 
+		// Build deterministic per-absorber names so the time/freq dump files have
+		// somewhere to land and the inline-init "Can't open file:" warnings go away.
+		std::stringstream nameE; nameE << "modal_absorber_" << i << "_E";
+		std::stringstream nameH; nameH << "modal_absorber_" << i << "_H";
+
 		// Create E-field mode match integral (field type 0).
 		ProcessModeMatch* pmm_E = new ProcessModeMatch(NewEngineInterface());
+		pmm_E->SetName(nameE.str());
 		pmm_E->SetFieldType(0);
 		pmm_E->GetNormalDir(op_ext->GetNy());
 		pmm_E->SetProcessInterval(1);
@@ -502,6 +509,7 @@ void openEMS::SetupModalAbsorbProcessing()
 		// NOTE: bounding box matches the E-plane for now; indexing offset along
 		// the normal direction to land on the actual Yee H-plane is TODO.
 		ProcessModeMatch* pmm_H = new ProcessModeMatch(NewEngineInterface());
+		pmm_H->SetName(nameH.str());
 		pmm_H->SetFieldType(1);
 		pmm_H->SetDualTime(true);
 		pmm_H->SetDualMesh(true);

@@ -77,8 +77,8 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 
 
 	// Store physical bounding box coordinates before snapping, for use by SetupModalAbsorbProcessing.
-	double* dStart_phys = cSheet->GetStartCoord()->GetCoords(m_Op->m_MeshType);
-	double* dStop_phys  = cSheet->GetStopCoord()->GetCoords(m_Op->m_MeshType);
+	const double* dStart_phys = cSheet->GetStartCoord()->GetCoords(m_Op->m_MeshType);
+	const double* dStop_phys  = cSheet->GetStopCoord()->GetCoords(m_Op->m_MeshType);
 	for (int n = 0; n < 3; ++n)
 	{
 		m_dSheetStart[n] = dStart_phys[n];
@@ -267,8 +267,11 @@ bool Operator_Ext_Absorbing_BC::BuildExtension()
 
 Engine_Extension* Operator_Ext_Absorbing_BC::CreateEngineExtention()
 {
-	Engine_Ext_Absorbing_BC* eng_ext = new Engine_Ext_Absorbing_BC(this);
-	return eng_ext;
+	// Assigning to the base m_Eng_Ext is what makes GetEngineExtention() return
+	// this instance later (matches the Operator_Ext_SteadyState pattern).
+	// Without this, SetupModalAbsorbProcessing can't reach the engine extension.
+	m_Eng_Ext = new Engine_Ext_Absorbing_BC(this);
+	return m_Eng_Ext;
 }
 
 void Operator_Ext_Absorbing_BC::ShowStat(std::ostream &ostr) const
