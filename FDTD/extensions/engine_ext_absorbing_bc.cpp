@@ -76,8 +76,18 @@ Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_e
 	m_pos_ny0_shift_V = m_posStart[m_ny] + (normalSignPositive  ? 1 : -1);
 
 	// Initialize shifted position for I. Different for super-absorption
-	m_pos_ny0_I = m_posStart[m_ny] + (normalSignPositive ? 0 : -1);
-	m_pos_ny0_shift_I = m_posStart[m_ny] + (normalSignPositive ? 1 : -2);
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
+		{
+			// In this case, the H-field is absorbed
+			m_pos_ny0_I = m_posStart[m_ny] + (normalSignPositive ? 0 : -1);
+			m_pos_ny0_shift_I = m_posStart[m_ny] + (normalSignPositive ? 1 : -2);
+		}
+	else if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MODAL)
+		{
+			// In this case, the H-field is absorbed
+			m_pos_ny0_I = m_posStart[m_ny] + (normalSignPositive ? -1 : 0);
+			m_pos_ny0_shift_I = m_posStart[m_ny] + (normalSignPositive ? -2 : 1);
+		}
 
 	m_V_nyP.Init("volt_nyP",m_numLines);
 	m_V_nyPP.Init("volt_nyPP",m_numLines);
@@ -142,7 +152,8 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 		// Modal amplitude of the wave leaving the domain through this absorber:
 		//   normalSign = +1 (outward normal +ny): outgoing wave is a_pos = 0.5*(Emm + Zw*Hmm)
 		//   normalSign = -1 (outward normal -ny): outgoing wave is a_neg = 0.5*(Emm - Zw*Hmm)
-		double a = 0.5 * (Emm + m_normalSign * m_Zw * Hmm);
+		// double a = 0.5 * (Emm + m_normalSign * m_Zw * Hmm);
+		double a = 0.5 * (Emm - m_normalSign * m_Zw * Hmm);
 
 		const Operator* op = m_Op_ABC->m_Op;
 
@@ -168,7 +179,7 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 		}
 
 		// I correction at the H plane: I_comp -= normalSign * (a/Zw) * modeH[comp][i][j] * EdgeLength_comp_dual
-		double dH_factor = m_normalSign * a / m_Zw;
+		double dH_factor = -m_normalSign * a / m_Zw;
 		unsigned int pos_i[] = {0,0,0};
 		pos_i[m_ny] = m_pos_ny0_I;
 		for (unsigned int i = 0; i < numLinesH_P; ++i)
