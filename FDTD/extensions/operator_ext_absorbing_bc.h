@@ -83,10 +83,7 @@ public:
 	double GetZw() const { return m_Zw; }
 
 	//! Copy the sheet bounding box (drawing units) into the caller's arrays.
-	void GetSheetBoundingBox(double start[3], double stop[3]) const
-	{
-		for (int n = 0; n < 3; ++n) { start[n] = m_dSheetStart[n]; stop[n] = m_dSheetStop[n]; }
-	}
+	void GetSheetBoundingBox(double start[3], double stop[3], bool Efield = true) const;
 
 protected:
 
@@ -107,6 +104,10 @@ protected:
 	// Physical coordinates of the sheet bounding box (drawing units), stored from SetInitParams.
 	double			m_dSheetStart[3];
 	double			m_dSheetStop[3];
+
+	// H-Field PMM sheet coordinates
+	double			m_hSheetStart[3];
+	double			m_hSheetStop[3];
 
 	// Mode file names for modal absorber (empty for non-modal types).
 	std::string		m_EModeFileName;

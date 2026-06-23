@@ -504,6 +504,9 @@ void openEMS::SetupModalAbsorbProcessing()
 			pmm_E->SetModeFileName(op_ext->GetEModeFileName());
 		PA->AddProcessing(pmm_E);
 
+		// Re-take for H-field, as there may be a shift due to absorption direction
+		op_ext->GetSheetBoundingBox(sheetStart, sheetStop, false);
+
 		// Create H-field mode match integral (field type 1).
 		// H-field lives on the dual mesh and is evaluated at half-integer timesteps.
 		// NOTE: bounding box matches the E-plane for now; indexing offset along

@@ -143,6 +143,23 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 	m_HModeFileName = abc_prop->GetHModeFileName();
 	m_Zw = abc_prop->GetWaveImpedance();
 
+	// Now the H-Field PMM coordinates
+	// * Start by detecting the ePMM index
+	bool isInside;
+	unsigned int ePMMidx = m_Op->SnapToMeshLine(m_ny, m_sheetX0[m_ny], isInside, false, true);
+
+	// Shift one index back if this is catching negative direction propgating waves
+	if ((m_normalSignPositive && (ePMMidx == 0)) || (!m_normalSignPositive && (ePMMidx == (m_Op->GetNumberOfLines(m_ny) - 1))))
+		cerr 	<< "Operator_Ext_Absorbing_BC::SetInitParams(): Warning: Trying to set local absorber on bonding box edge. Results will be erroneous"
+				<< " ID: " << prim->GetID() << " @ Property: " << abc_prop->GetName() << endl;
+
+	else
+		ePMMidx -= (int)m_normalSignPositive;
+
+	// Update for the H-field sheet (PMM)
+	m_hSheetStop[m_ny] = m_hSheetStart[m_ny] = m_Op->GetDiscLine(m_ny, ePMMidx, false);
+
+
 	prim->SetPrimitiveUsed(true);
 
 	return true;
@@ -281,6 +298,17 @@ void Operator_Ext_Absorbing_BC::ShowStat(std::ostream &ostr) const
 	ostr << " Total cells: " << m_numCells << endl;
 }
 
+void Operator_Ext_Absorbing_BC::GetSheetBoundingBox(double start[3], double stop[3], bool Efield) const
+{
+	const double* startArr = Efield ? m_dSheetStart : m_hSheetStart;
+	const double* stopArr  = Efield ? m_dSheetStop  : m_hSheetStop ;
+
+	for (int n = 0; n < 3; ++n)
+	{
+		start[n] = startArr[n];
+		stop[n] = stopArr[n];
+	}
+}
 
 
 
