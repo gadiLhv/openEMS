@@ -101,6 +101,9 @@ protected:
 	unsigned int	m_sheetX0[3];
 	unsigned int	m_sheetX1[3];
 
+	unsigned int	m_sheetX0_h[3];
+	unsigned int	m_sheetX1_h[3];
+
 	// Physical coordinates of the sheet bounding box (drawing units), stored from SetInitParams.
 	double			m_dSheetStart[3];
 	double			m_dSheetStop[3];

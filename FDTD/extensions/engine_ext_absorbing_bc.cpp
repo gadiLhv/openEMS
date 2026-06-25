@@ -76,18 +76,18 @@ Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_e
 	m_pos_ny0_shift_V = m_posStart[m_ny] + (normalSignPositive  ? 1 : -1);
 
 	// Initialize shifted position for I. Different for super-absorption
-	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
-		{
-			// In this case, the H-field is absorbed
-			m_pos_ny0_I = m_posStart[m_ny] + (normalSignPositive ? 0 : -1);
-			m_pos_ny0_shift_I = m_posStart[m_ny] + (normalSignPositive ? 1 : -2);
-		}
-	else if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MODAL)
-		{
-			// In this case, the H-field is absorbed
-			m_pos_ny0_I = m_posStart[m_ny] + (normalSignPositive ? -1 : 0);
-			m_pos_ny0_shift_I = m_posStart[m_ny] + (normalSignPositive ? -2 : 1);
-		}
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MODAL)
+	{
+		// In this case, the H-field is absorbed
+		m_pos_ny0_I = m_posStart[m_ny] + (normalSignPositive ? 0 : -1);
+		m_pos_ny0_shift_I = m_posStart[m_ny] + (normalSignPositive ? 1 : -2);
+	}
+	else
+	{
+		// In this case, the H-field is absorbed
+		m_pos_ny0_I = m_Op_ABC->m_sheetX0_h[m_ny];
+		m_pos_ny0_shift_I = 0;
+	}
 
 	m_V_nyP.Init("volt_nyP",m_numLines);
 	m_V_nyPP.Init("volt_nyPP",m_numLines);
@@ -175,6 +175,9 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 				double el_nyPP = op->GetEdgeLength(m_nyPP, pos_v, false);
 				eng->EngType::SetVolt(m_nyP,  pos_v, eng->EngType::GetVolt(m_nyP,  pos_v) - a * m_Eng_Interface->GetModeDistE(0, i, j) * el_nyP);
 				eng->EngType::SetVolt(m_nyPP, pos_v, eng->EngType::GetVolt(m_nyPP, pos_v) - a * m_Eng_Interface->GetModeDistE(1, i, j) * el_nyPP);
+//				eng->EngType::SetVolt(m_nyP,  pos_v, eng->EngType::GetVolt(m_nyP,  pos_v) - a * m_Eng_Interface->GetModeDistE(0, i, j));
+//				eng->EngType::SetVolt(m_nyPP, pos_v, eng->EngType::GetVolt(m_nyPP, pos_v) - a * m_Eng_Interface->GetModeDistE(1, i, j));
+
 			}
 		}
 
@@ -192,6 +195,9 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 				double el_nyPP_d = op->GetEdgeLength(m_nyPP, pos_i, true);
 				eng->EngType::SetCurr(m_nyP,  pos_i, eng->EngType::GetCurr(m_nyP,  pos_i) - dH_factor * m_Eng_Interface->GetModeDistH(0, i, j) * el_nyP_d);
 				eng->EngType::SetCurr(m_nyPP, pos_i, eng->EngType::GetCurr(m_nyPP, pos_i) - dH_factor * m_Eng_Interface->GetModeDistH(1, i, j) * el_nyPP_d);
+//				eng->EngType::SetCurr(m_nyP,  pos_i, eng->EngType::GetCurr(m_nyP,  pos_i) - dH_factor * m_Eng_Interface->GetModeDistH(0, i, j));
+//				eng->EngType::SetCurr(m_nyPP, pos_i, eng->EngType::GetCurr(m_nyPP, pos_i) - dH_factor * m_Eng_Interface->GetModeDistH(1, i, j));
+
 			}
 		}
 		return;

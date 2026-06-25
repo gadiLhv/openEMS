@@ -11,7 +11,7 @@
 """
 
 # ## Import Libraries
-import os, tempfile, shutil
+import os, tempfile, shutil, glob, re
 from pylab import *
 
 from CSXCAD  import ContinuousStructure
@@ -28,7 +28,7 @@ shutil.copy("Coax_Er.csv", Sim_Path)
 shutil.copy("Coax_Hr.csv", Sim_Path)
 
 post_proc_only = False
-display_structure = False
+display_structure = True
 
 # substrate setup
 coax_D             = 2
@@ -40,7 +40,7 @@ teflon_epsR = 2.5
 
 mesh_res = 0.5
 
-Airbox_Add = 0
+Airbox_Add = 1
 unit_res = 1e-3
 
 # simulation box
@@ -57,7 +57,7 @@ f0 = 2.5e9
 fc = 1e9
 
 # ## FDTD setup
-FDTD = openEMS(NrTS=300000, EndCriteria=1e-4)
+FDTD = openEMS(NrTS=300000, EndCriteria=1e-4, OverSampling=50)
 FDTD.SetGaussExcite(f0, fc)
 FDTD.SetBoundaryCond(['MUR', 'MUR', 'MUR', 'MUR', 'MUR', 'MUR'])
 
@@ -124,8 +124,9 @@ mesh.SmoothMeshLines('all', mesh_res, 1.25)
 
 # find port / absorber mesh positions
 Zz = mesh.GetLines('z')
-idxPort1 = (np.where(Zz == 0.0)[0] + 1).item(0)
-idxPort2 = (np.where(Zz == coax_L)[0] - 1).item(0)
+idxPort1 = (np.where(Zz == 0.0)[0] + 15).item(0)
+idxPort2 = (np.where(Zz == coax_L)[0] - 3).item(0)
+idxAbs1  = idxPort1 - 10   # one cell outside the second port plane → absorber location
 idxAbs2  = idxPort2 + 1   # one cell outside the second port plane → absorber location
 
 # --- Port 1: waveguide port with excitation (same as Coax_W_WG_Ports.py) ---
@@ -135,6 +136,16 @@ port1 = FDTD.AddWaveGuidePort(1, start, stop, 'z',
                                E_file="Coax_Er.csv", H_file="Coax_Hr.csv",
                                kc=0.0, excite=1, excite_type=0)
 
+abs_z = Zz.item(idxAbs1)
+abs_start = [-coax_D * 0.5 - coax_shield_thick, -coax_D * 0.5 - coax_shield_thick, abs_z]
+abs_stop  = [ coax_D * 0.5 + coax_shield_thick,  coax_D * 0.5 + coax_shield_thick, abs_z]
+modal_abs_1 = FDTD.AddModalAbsorber(abs_start, abs_stop, 'z',
+                                    E_file="Coax_Er.csv",
+                                    H_file="Coax_Hr.csv",
+                                    normal_positive=True,
+                                    Zw=238.26517157)
+
+
 # --- Absorber: modal absorber replacing the second waveguide port ---
 # The sheet is placed at the mesh line just outside the waveguide end.
 # normal_positive=False because the incoming wave travels in the +z direction
@@ -142,11 +153,17 @@ port1 = FDTD.AddWaveGuidePort(1, start, stop, 'z',
 abs_z = Zz.item(idxAbs2)
 abs_start = [-coax_D * 0.5 - coax_shield_thick, -coax_D * 0.5 - coax_shield_thick, abs_z]
 abs_stop  = [ coax_D * 0.5 + coax_shield_thick,  coax_D * 0.5 + coax_shield_thick, abs_z]
-modal_abs = FDTD.AddModalAbsorber(abs_start, abs_stop, 'z',
-                                   E_file="Coax_Er.csv",
-                                   H_file="Coax_Hr.csv",
-                                   normal_positive=False,
-                                   Zw=238.26517157)
+modal_abs_2 = FDTD.AddModalAbsorber(abs_start, abs_stop, 'z',
+                                    E_file="Coax_Er.csv",
+                                    H_file="Coax_Hr.csv",
+                                    normal_positive=False,
+                                    Zw=238.26517157)
+
+### Define dump box...
+Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
+start = [SimBox[0], SimBox[2], SimBox[4]];
+stop  = [SimBox[1], SimBox[3], SimBox[5]];
+Et.AddBox(start, stop);
 
 # ## Run the simulation
 if display_structure:
@@ -178,5 +195,68 @@ legend()
 ylabel('S-Parameter (dB)')
 xlabel('Frequency (GHz)')
 title('Coaxial line — modal absorber vs. WG port termination')
+
+# ## Modal-absorber mode-match graphical debugging
+# Each modal absorber dumps two time-domain mode-match files into Sim_Path:
+#   modal_absorber_<i>_E  -> column 'voltage' = E-field mode amplitude (E)
+#   modal_absorber_<i>_H  -> column 'current' = H-field mode amplitude (H)
+# (file columns:  % t/s   <voltage|current>   mode_purity)
+# The travelling-wave amplitudes are  a+- = E +- Zw*H, i.e. the forward/backward
+# mode amplitudes. For a working absorber the incident wave should carry almost
+# all of the energy in one of a+/a-, and the counter-propagating component
+# (the reflection the absorber failed to swallow) should be strongly suppressed.
+
+# Wave impedance used when each absorber was created (see AddModalAbsorber above).
+# Map absorber index -> Zw if they ever differ; here both share the same value.
+Zw_abs_default = 238.26517157
+Zw_abs = {}   # e.g. {0: 238.26517157} to override per absorber
+
+def _read_modematch_td(fname):
+    """Return (t, value) from a ProcessModeMatch time-domain dump (data column 1)."""
+    data = np.loadtxt(fname, comments='%', ndmin=2)
+    if data.size == 0:
+        return None, None
+    return data[:, 0], data[:, 1]
+
+_idx_re = re.compile(r'modal_absorber_(\d+)_E$')
+e_files = sorted(glob.glob(os.path.join(Sim_Path, 'modal_absorber_*_E')),
+                 key=lambda p: int(_idx_re.search(p).group(1)))
+
+if not e_files:
+    print("No modal-absorber mode-match files found in {} "
+          "(run the simulation first).".format(Sim_Path))
+
+for e_file in e_files:
+    idx    = int(_idx_re.search(e_file).group(1))
+    h_file = os.path.join(Sim_Path, 'modal_absorber_{}_H'.format(idx))
+    if not os.path.exists(h_file):
+        print("Absorber {}: missing H file {}, skipping.".format(idx, h_file))
+        continue
+
+    tE, E = _read_modematch_td(e_file)
+    tH, H = _read_modematch_td(h_file)
+    if tE is None or tH is None:
+        print("Absorber {}: empty mode-match file, skipping.".format(idx))
+        continue
+
+    # H lives on the dual (half-timestep-shifted) Yee grid -> resample onto tE
+    # so E and H can be combined sample-by-sample.
+    H_on_E = np.interp(tE, tH, H)
+
+    Zw_i    = Zw_abs.get(idx, Zw_abs_default)
+    a_plus  = E + Zw_i * H_on_E
+    a_minus = E - Zw_i * H_on_E
+
+    figure()
+    subplot(2, 1, 1)
+    plot(tE / 1e-9, E,            'b-',  label='E  (voltage mode match)')
+    plot(tE / 1e-9, Zw_i * H_on_E, 'r--', label=r'$Z_w\,H$  (current mode match)')
+    grid(); legend(); ylabel('amplitude')
+    title('Modal absorber #{}  —  mode-match constituents ($Z_w$ = {:.3f} $\\Omega$)'.format(idx, Zw_i))
+
+    subplot(2, 1, 2)
+    plot(tE / 1e-9, a_plus,  'k-', linewidth=2, label=r'$a_+ = E + Z_w H$')
+    plot(tE / 1e-9, a_minus, 'g-', linewidth=2, label=r'$a_- = E - Z_w H$')
+    grid(); legend(); ylabel('amplitude'); xlabel('time (ns)')
 
 show()

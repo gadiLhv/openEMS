@@ -145,19 +145,37 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 
 	// Now the H-Field PMM coordinates
 	// * Start by detecting the ePMM index
-	bool isInside;
-	unsigned int ePMMidx = m_Op->SnapToMeshLine(m_ny, m_sheetX0[m_ny], isInside, false, true);
 
+	for (unsigned int iy = 0 ; iy < 3 ; iy++)
+	{
+		m_sheetX0_h[iy] = m_sheetX0[iy];
+		m_sheetX1_h[iy] = m_sheetX1[iy];
+	}
+
+	// Determine correct shift and notify user if it slides out of bounding box
+	unsigned int hShift = (unsigned int)m_normalSignPositive;
 	// Shift one index back if this is catching negative direction propgating waves
-	if ((m_normalSignPositive && (ePMMidx == 0)) || (!m_normalSignPositive && (ePMMidx == (m_Op->GetNumberOfLines(m_ny) - 1))))
+	if ((m_normalSignPositive && (m_sheetX0_h[m_ny] == 0)) || (!m_normalSignPositive && (m_sheetX0_h[m_ny] == (m_Op->GetNumberOfLines(m_ny) - 1))))
+	{
 		cerr 	<< "Operator_Ext_Absorbing_BC::SetInitParams(): Warning: Trying to set local absorber on bonding box edge. Results will be erroneous"
 				<< " ID: " << prim->GetID() << " @ Property: " << abc_prop->GetName() << endl;
 
-	else
-		ePMMidx -= (int)m_normalSignPositive;
+		hShift = 0;
+	}
 
+	// Copy data
+	for (unsigned int iy = 0 ; iy < 3 ; iy++)
+	{
+		m_sheetX0_h[iy] = m_sheetX0[iy];
+		m_sheetX1_h[iy] = m_sheetX1[iy];
+
+		m_hSheetStart[iy] = m_dSheetStart[iy];
+		m_hSheetStop[iy]  = m_dSheetStop[iy];
+	}
+	// Update shifted coordinates for h-field
+	m_sheetX0_h[m_ny] = m_sheetX1_h[m_ny] = m_sheetX0[m_ny] - hShift;
 	// Update for the H-field sheet (PMM)
-	m_hSheetStop[m_ny] = m_hSheetStart[m_ny] = m_Op->GetDiscLine(m_ny, ePMMidx, false);
+	m_hSheetStop[m_ny] = m_hSheetStart[m_ny] = m_Op->GetDiscLine(m_ny, m_sheetX1_h[m_ny], false);
 
 
 	prim->SetPrimitiveUsed(true);
