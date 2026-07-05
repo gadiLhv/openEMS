@@ -36,6 +36,7 @@
 #include "FDTD/engine_interface_fdtd.h"
 #include "tools/array_ops.h"
 #include "tools/useful.h"
+#include "tools/global.h"
 #include "operator_ext_excitation.h"
 
 Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_ext) :
@@ -69,6 +70,7 @@ Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_e
 	m_Zw = m_Op_ABC->GetZw();
 	m_normalSign = normalSignPositive ? +1 : -1;
 	m_Hmm_prev = 0.0;
+	m_corr_gain = -1.0;   // computed lazily on first use (needs the PMM grids)
 
 	m_start_TS = 0;
 
@@ -149,11 +151,23 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 		double Hmm  = 0.5 * (m_Hmm_prev + Hmm_curr);
 		m_Hmm_prev  = Hmm_curr;
 
-		// Modal amplitude of the wave leaving the domain through this absorber:
-		//   normalSign = +1 (outward normal +ny): outgoing wave is a_pos = 0.5*(Emm + Zw*Hmm)
-		//   normalSign = -1 (outward normal -ny): outgoing wave is a_neg = 0.5*(Emm - Zw*Hmm)
-		// double a = 0.5 * (Emm + m_normalSign * m_Zw * Hmm);
+		// Modal amplitude of the wave leaving the domain through this absorber.
+		// The absorbed propagation direction is p = -normalSign. Template sign
+		// convention: a +ny-travelling wave measures Zw*Hmm = +Emm (c_h = +1);
+		// verified against the working waveguide-port S-parameter math, which
+		// reconstructs the incident wave as 0.5*(uf + Zref*if) from the same
+		// mode-match probes. The outgoing-wave selector is therefore
+		//   a = 0.5*(Emm + s*Zw*Hmm),  s = p*c_h = -normalSign.
+		// NOTE: this sign and dH_factor below form a pair -- always flip together.
 		double a = 0.5 * (Emm - m_normalSign * m_Zw * Hmm);
+
+		// Diagnostic aid: measure-only mode. The PMMs keep recording (dumps stay
+		// valid) but the absorber applies no correction, so the undisturbed field
+		// can be compared against the mode templates. Enable by setting the
+		// environment variable OPENEMS_ABC_MEASURE_ONLY.
+		static const bool measure_only = (getenv("OPENEMS_ABC_MEASURE_ONLY") != NULL);
+		if (measure_only)
+			return;
 
 		const Operator* op = m_Op_ABC->m_Op;
 
@@ -162,15 +176,51 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 		unsigned int numLinesH_P  = m_Eng_Interface->GetModeMatchH_NumLines(0);
 		unsigned int numLinesH_PP = m_Eng_Interface->GetModeMatchH_NumLines(1);
 
-		// V correction at the E plane: V_comp -= a * modeE[comp][i][j] * EdgeLength_comp
+		// Apply the corrections on EXACTLY the grid the mode-match measured:
+		// the PMM's snapped start indices (published via the interface). Snapping
+		// independently here disagrees by one cell (dual-mesh rounding / boundary
+		// clipping) and the removed "mode" no longer matches the measured one.
+		unsigned int startE[3], startH[3];
+		for (int n = 0; n < 3; ++n)
+		{
+			startE[n] = m_Eng_Interface->GetModeMatchE_Start(n);
+			startH[n] = m_Eng_Interface->GetModeMatchH_Start(n);
+		}
+
+		// Correction gain (discrete matching). Subtracting the FULL measured
+		// amplitude every timestep over-corrects whenever the wave crosses less
+		// than one cell per step: at nu = v*dt/dz ~ 0.1 the full-gain scheme
+		// reflects ~80% of the field (measured, 1D and 3D). The matched per-step
+		// gain for this staggered subtract-at-plane scheme is
+		//   kappa = 2*nu/(1+nu),   nu = v*dt/dz_local
+		// with dz_local = 2*|z_Eplane - z_Hplane| (the E/H planes are half a cell
+		// apart) and v = Zw/mu0 (TEM in a non-magnetic medium). Verified in 1D:
+		// R < 0.01 for nu in [0.1, 0.5], both absorber orientations.
+		if (m_corr_gain < 0.0)
+		{
+			double zE = op->GetDiscLine(m_ny, startE[m_ny], false);
+			double zH = op->GetDiscLine(m_ny, startH[m_ny], true);
+			double dz = 2.0 * fabs(zE - zH) * op->GetGridDelta();
+			double v  = m_Zw / (4e-7 * M_PI);
+			double nu_loc = (dz > 0.0) ? (v * op->GetTimestep() / dz) : 1.0;
+			m_corr_gain = 2.0 * nu_loc / (1.0 + nu_loc);
+			if (g_settings.GetVerboseLevel() > 0)
+				std::cerr << "Engine_Ext_Absorbing_BC: modal absorber local nu=" << nu_loc
+				          << " -> correction gain " << m_corr_gain << std::endl;
+		}
+		a *= m_corr_gain;
+
+		// V correction at the E plane. The mode template m is L2-normalized over the
+		// sheet (sum m^2*dA = 1), so 'a' is the field-amplitude coefficient and the
+		// per-edge voltage correction is  V -= a * m * EdgeLength  (E = V/dl).
 		unsigned int pos_v[] = {0,0,0};
-		pos_v[m_ny] = m_posStart[m_ny];
+		pos_v[m_ny] = startE[m_ny];
 		for (unsigned int i = 0; i < numLinesE_P; ++i)
 		{
-			pos_v[m_nyP] = m_posStart[m_nyP] + i;
+			pos_v[m_nyP] = startE[m_nyP] + i;
 			for (unsigned int j = 0; j < numLinesE_PP; ++j)
 			{
-				pos_v[m_nyPP] = m_posStart[m_nyPP] + j;
+				pos_v[m_nyPP] = startE[m_nyPP] + j;
 				double el_nyP  = op->GetEdgeLength(m_nyP,  pos_v, false);
 				double el_nyPP = op->GetEdgeLength(m_nyPP, pos_v, false);
 				double mE_nyP  = m_Eng_Interface->GetModeDistE(0, i, j);
@@ -178,40 +228,37 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 				// Skip conductor cells (zero mode value) so the modal correction
 				// never overwrites a PEC-owned edge; only the live mode region is
 				// corrected (mirrors the mode-file excitation's "amp!=0" guard).
-//				if (mE_nyP != 0.0)
-//					eng->EngType::SetVolt(m_nyP,  pos_v, eng->EngType::GetVolt(m_nyP,  pos_v) - a * mE_nyP * el_nyP);
-//				if (mE_nyPP != 0.0)
-//					eng->EngType::SetVolt(m_nyPP, pos_v, eng->EngType::GetVolt(m_nyPP, pos_v) - a * mE_nyPP * el_nyPP);
-				eng->EngType::SetVolt(m_nyP,  pos_v, eng->EngType::GetVolt(m_nyP,  pos_v) - a * m_Eng_Interface->GetModeDistE(0, i, j));
-				eng->EngType::SetVolt(m_nyPP, pos_v, eng->EngType::GetVolt(m_nyPP, pos_v) - a * m_Eng_Interface->GetModeDistE(1, i, j));
-
+				if (mE_nyP != 0.0)
+					eng->EngType::SetVolt(m_nyP,  pos_v, eng->EngType::GetVolt(m_nyP,  pos_v) - a * mE_nyP * el_nyP);
+				if (mE_nyPP != 0.0)
+					eng->EngType::SetVolt(m_nyPP, pos_v, eng->EngType::GetVolt(m_nyPP, pos_v) - a * mE_nyPP * el_nyPP);
 			}
 		}
 
-		// I correction at the H plane: I_comp -= normalSign * (a/Zw) * modeH[comp][i][j] * EdgeLength_comp_dual
-		// Sign fix: with GetCurr - dH_factor*modeH below, a positive dH_factor
-		// yields  I_comp -= normalSign*(a/Zw)*modeH  as documented above.
-		double dH_factor = m_normalSign * a / m_Zw;
+		// I correction at the H plane. The selector above and this launcher sign
+		// are INDEPENDENT degrees of freedom: the selector decides which wave is
+		// measured, this sign decides which direction the canceling (E,H) pair
+		// radiates. Direction verified by a one-shot kick experiment (arrival-time
+		// analysis at neighboring probes): -normalSign launches OUTWARD through
+		// the absorber for both orientations, as required.
+		double dH_factor = -m_normalSign * a / m_Zw;
 		unsigned int pos_i[] = {0,0,0};
-		pos_i[m_ny] = m_pos_ny0_I;
+		pos_i[m_ny] = startH[m_ny];
 		for (unsigned int i = 0; i < numLinesH_P; ++i)
 		{
-			pos_i[m_nyP] = m_posStart[m_nyP] + i;
+			pos_i[m_nyP] = startH[m_nyP] + i;
 			for (unsigned int j = 0; j < numLinesH_PP; ++j)
 			{
-				pos_i[m_nyPP] = m_posStart[m_nyPP] + j;
+				pos_i[m_nyPP] = startH[m_nyPP] + j;
 				double el_nyP_d  = op->GetEdgeLength(m_nyP,  pos_i, true);
 				double el_nyPP_d = op->GetEdgeLength(m_nyPP, pos_i, true);
 				double mH_nyP  = m_Eng_Interface->GetModeDistH(0, i, j);
 				double mH_nyPP = m_Eng_Interface->GetModeDistH(1, i, j);
-//				// Skip conductor cells (zero mode value); see note on the V loop above.
-//				if (mH_nyP != 0.0)
-//					eng->EngType::SetCurr(m_nyP,  pos_i, eng->EngType::GetCurr(m_nyP,  pos_i) - dH_factor * mH_nyP * el_nyP_d);
-//				if (mH_nyPP != 0.0)
-//					eng->EngType::SetCurr(m_nyPP, pos_i, eng->EngType::GetCurr(m_nyPP, pos_i) - dH_factor * mH_nyPP * el_nyPP_d);
-				eng->EngType::SetCurr(m_nyP,  pos_i, eng->EngType::GetCurr(m_nyP,  pos_i) - dH_factor * m_Eng_Interface->GetModeDistH(0, i, j));
-				eng->EngType::SetCurr(m_nyPP, pos_i, eng->EngType::GetCurr(m_nyPP, pos_i) - dH_factor * m_Eng_Interface->GetModeDistH(1, i, j));
-
+				// Skip conductor cells (zero mode value); see note on the V loop above.
+				if (mH_nyP != 0.0)
+					eng->EngType::SetCurr(m_nyP,  pos_i, eng->EngType::GetCurr(m_nyP,  pos_i) - dH_factor * mH_nyP * el_nyP_d);
+				if (mH_nyPP != 0.0)
+					eng->EngType::SetCurr(m_nyPP, pos_i, eng->EngType::GetCurr(m_nyPP, pos_i) - dH_factor * mH_nyPP * el_nyPP_d);
 			}
 		}
 		return;

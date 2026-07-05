@@ -61,12 +61,14 @@ public:
 	                          const double* const* mode_nyP,
 	                          const double* const* mode_nyPP,
 	                          unsigned int numLines_nyP,
-	                          unsigned int numLines_nyPP);
+	                          unsigned int numLines_nyPP,
+	                          const unsigned int start[3]);
 	void SetModeMatchH_Source(const double* integral,
 	                          const double* const* mode_nyP,
 	                          const double* const* mode_nyPP,
 	                          unsigned int numLines_nyP,
-	                          unsigned int numLines_nyPP);
+	                          unsigned int numLines_nyPP,
+	                          const unsigned int start[3]);
 
 	//! Latest mode-match integral value, or 0 if no source was registered.
 	double GetLastModeMatchE() const
@@ -84,6 +86,12 @@ public:
 	unsigned int GetModeMatchE_NumLines(int axis) const { return m_ModeMatchE_numLines[axis]; }
 	unsigned int GetModeMatchH_NumLines(int axis) const { return m_ModeMatchH_numLines[axis]; }
 
+	//! Snapped grid start index of the mode-match plane on mesh axis n (0..2).
+	//! The engine correction MUST be applied at exactly these indices so that the
+	//! measurement grid and the correction grid coincide.
+	unsigned int GetModeMatchE_Start(int n) const { return m_ModeMatchE_start[n]; }
+	unsigned int GetModeMatchH_Start(int n) const { return m_ModeMatchH_start[n]; }
+
 protected:
 	Operator* m_Op;
 	Engine* m_Eng;
@@ -93,11 +101,13 @@ protected:
 	const double* const* m_ModeDistE_nyP;
 	const double* const* m_ModeDistE_nyPP;
 	unsigned int         m_ModeMatchE_numLines[2];
+	unsigned int         m_ModeMatchE_start[3];
 
 	const double*        m_ModeMatchH_integral;
 	const double* const* m_ModeDistH_nyP;
 	const double* const* m_ModeDistH_nyPP;
 	unsigned int         m_ModeMatchH_numLines[2];
+	unsigned int         m_ModeMatchH_start[3];
 
 	//! Internal method to get an interpolated field of a given type. (0: E, 1: J, 2: rotH, 3: D)
 	virtual double* GetRawInterpolatedField(const unsigned int* pos, double* out, int type) const;

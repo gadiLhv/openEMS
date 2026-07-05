@@ -488,6 +488,12 @@ void openEMS::SetupModalAbsorbProcessing()
 		double sheetStart[3], sheetStop[3];
 		op_ext->GetSheetBoundingBox(sheetStart, sheetStop);
 
+		// The mode file's local coordinate frame is anchored at the physical start
+		// corner of the absorber's E sheet (identical to the excitation convention,
+		// see Operator_Ext_Excitation::shiftCoordsForModeFile). Both PMMs must look
+		// up the CSV with this origin -- NOT with their own snapped start line.
+		double modeFileOrigin[3] = {sheetStart[0], sheetStart[1], sheetStart[2]};
+
 		// Build deterministic per-absorber names so the time/freq dump files have
 		// somewhere to land and the inline-init "Can't open file:" warnings go away.
 		std::stringstream nameE; nameE << "modal_absorber_" << i << "_E";
@@ -502,6 +508,8 @@ void openEMS::SetupModalAbsorbProcessing()
 		pmm_E->DefineStartStopCoord(sheetStart, sheetStop);
 		if (!op_ext->GetEModeFileName().empty())
 			pmm_E->SetModeFileName(op_ext->GetEModeFileName());
+		pmm_E->SetModeFileOrigin(modeFileOrigin);
+		pmm_E->SetYeeConsistent(true);
 		PA->AddProcessing(pmm_E);
 
 		// Re-take for H-field, as there may be a shift due to absorption direction
@@ -521,6 +529,8 @@ void openEMS::SetupModalAbsorbProcessing()
 		pmm_H->DefineStartStopCoord(sheetStart, sheetStop);
 		if (!op_ext->GetHModeFileName().empty())
 			pmm_H->SetModeFileName(op_ext->GetHModeFileName());
+		pmm_H->SetModeFileOrigin(modeFileOrigin);
+		pmm_H->SetYeeConsistent(true);
 		PA->AddProcessing(pmm_H);
 
 		// PMM::InitProcess is called from PA->PreProcess() later. We need
@@ -534,16 +544,24 @@ void openEMS::SetupModalAbsorbProcessing()
 		pmm_E->GetNumLines(linesE);
 		pmm_H->GetNumLines(linesH);
 
+		// The PMMs snapped (and possibly boundary-clipped) their own grid start.
+		// Publish those exact indices so the engine applies its corrections on the
+		// very same cells the mode match measures -- any independent re-snap in the
+		// engine WILL disagree by one cell (dual-mesh rounding, boundary bump).
+		unsigned int startE[3], startH[3];
+		pmm_E->GetStartPos(startE);
+		pmm_H->GetStartPos(startH);
+
 		// Build a dedicated engine interface for this absorber and publish the
 		// mode-match sources through it; the engine extension reads scalars and
 		// mode-distribution samples via this mediator only (no PMM dependency).
 		Engine_Interface_FDTD* eif = NewEngineInterface();
 		eif->SetModeMatchE_Source(pmm_E->GetResults(),
 		                          pmm_E->GetModeDist(0), pmm_E->GetModeDist(1),
-		                          linesE[0], linesE[1]);
+		                          linesE[0], linesE[1], startE);
 		eif->SetModeMatchH_Source(pmm_H->GetResults(),
 		                          pmm_H->GetModeDist(0), pmm_H->GetModeDist(1),
-		                          linesH[0], linesH[1]);
+		                          linesH[0], linesH[1], startH);
 		eng_ext->SetEngineInterface(eif);
 	}
 }

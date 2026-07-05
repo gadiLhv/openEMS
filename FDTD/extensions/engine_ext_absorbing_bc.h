@@ -108,6 +108,7 @@ protected:
 	double		m_Zw;			// Wave impedance of the mode (Ohms)
 	int			m_normalSign;	// +1 if normalSignPositive, -1 otherwise
 	double		m_Hmm_prev;		// H mode-match value from the previous half-timestep (for time averaging)
+	double		m_corr_gain;	// per-step correction gain 2*nu/(1+nu); computed lazily (<0 = not yet)
 
 
 };

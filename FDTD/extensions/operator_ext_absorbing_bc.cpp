@@ -174,8 +174,11 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 	}
 	// Update shifted coordinates for h-field
 	m_sheetX0_h[m_ny] = m_sheetX1_h[m_ny] = m_sheetX0[m_ny] - hShift;
-	// Update for the H-field sheet (PMM)
-	m_hSheetStop[m_ny] = m_hSheetStart[m_ny] = m_Op->GetDiscLine(m_ny, m_sheetX1_h[m_ny], false);
+	// Update for the H-field sheet (PMM). The H mode-match runs on the DUAL mesh,
+	// so hand it the dual-node coordinate of the intended plane: a primary-line
+	// coordinate would be re-snapped onto the dual grid and can round to the
+	// neighboring dual plane (observed: one cell off along the normal).
+	m_hSheetStop[m_ny] = m_hSheetStart[m_ny] = m_Op->GetDiscLine(m_ny, m_sheetX1_h[m_ny], true);
 
 
 	prim->SetPrimitiveUsed(true);

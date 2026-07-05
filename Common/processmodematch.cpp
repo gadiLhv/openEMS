@@ -38,6 +38,12 @@ ProcessModeMatch::ProcessModeMatch(Engine_Interface_Base* eng_if) : ProcessInteg
 
 	m_ModeFileName.clear();
 	m_FieldSourceIsFile = false;
+
+	m_ModeFileOriginSet = false;
+	for (int n=0; n<3; ++n)
+		m_ModeFileOrigin[n] = 0.0;
+
+	m_YeeConsistent = false;
 }
 
 ProcessModeMatch::~ProcessModeMatch()
@@ -90,7 +96,10 @@ void ProcessModeMatch::InitProcess()
 		Enabled=false;
 		return;
 	}
-	m_Eng_Interface->SetInterpolationType(Engine_Interface_Base::NODE_INTERPOLATE);
+	// Yee-consistent mode reads raw per-edge fields (the same edges the absorber
+	// engine extension corrects); the classic probe path node-interpolates.
+	m_Eng_Interface->SetInterpolationType(m_YeeConsistent ? Engine_Interface_Base::NO_INTERPOLATION
+	                                                      : Engine_Interface_Base::NODE_INTERPOLATE);
 
 	int Dump_Dim=0;
 	m_ny = -1;
@@ -203,12 +212,40 @@ void ProcessModeMatch::InitProcess()
 
 			if (m_FieldSourceIsFile)
 			{
-				double locCoord[3] = {
-						discLine[0] - Op->GetDiscLine(0,start[0],dualMesh),
-						discLine[1] - Op->GetDiscLine(1,start[1],dualMesh),
-						discLine[2] - Op->GetDiscLine(2,start[2],dualMesh)};
+				// Mode-file coordinates are local to the defining box's physical start
+				// corner (like the excitation's shiftCoordsForModeFile). Fall back to
+				// the snapped start line only if no origin was provided -- NOTE: on the
+				// dual mesh that fallback origin is offset by half a cell.
+				if (m_YeeConsistent)
+				{
+					// Evaluate each tangential component's template at that component's
+					// own Yee edge midpoint (excitation convention, cf. GetYeeCoords):
+					// the component's own axis lives on the "other" grid, the remaining
+					// axes stay on this processing's grid.
+					for (int n=0; n<2; ++n)
+					{
+						int nc = (m_ny+n+1)%3;
+						double lc[3];
+						for (int d=0; d<3; ++d)
+						{
+							double cc = Op->GetDiscLine(d, pos[d], (d==nc) ? !dualMesh : dualMesh);
+							lc[d] = cc - (m_ModeFileOriginSet ? m_ModeFileOrigin[d]
+							                                  : Op->GetDiscLine(d,start[d],dualMesh));
+						}
+						double v01[2];
+						modeFile.LinInterp2(lc[nP], lc[nPP], v01[0], v01[1]);
+						m_ModeDist[n][posP][posPP] = v01[n];
+					}
+				}
+				else
+				{
+					double locCoord[3];
+					for (int n=0; n<3; ++n)
+						locCoord[n] = discLine[n] - (m_ModeFileOriginSet ? m_ModeFileOrigin[n]
+						                                                 : Op->GetDiscLine(n,start[n],dualMesh));
 
-				modeFile.LinInterp2(locCoord[nP],locCoord[nPP],m_ModeDist[0][posP][posPP],m_ModeDist[1][posP][posPP]);
+					modeFile.LinInterp2(locCoord[nP],locCoord[nPP],m_ModeDist[0][posP][posPP],m_ModeDist[1][posP][posPP]);
+				}
 			}
 			else
 				for (int n = 0; n < 2; ++n)
