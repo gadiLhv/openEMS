@@ -178,18 +178,20 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 				// Skip conductor cells (zero mode value) so the modal correction
 				// never overwrites a PEC-owned edge; only the live mode region is
 				// corrected (mirrors the mode-file excitation's "amp!=0" guard).
-				if (mE_nyP != 0.0)
-					eng->EngType::SetVolt(m_nyP,  pos_v, eng->EngType::GetVolt(m_nyP,  pos_v) - a * mE_nyP * el_nyP);
-				if (mE_nyPP != 0.0)
-					eng->EngType::SetVolt(m_nyPP, pos_v, eng->EngType::GetVolt(m_nyPP, pos_v) - a * mE_nyPP * el_nyPP);
-//				eng->EngType::SetVolt(m_nyP,  pos_v, eng->EngType::GetVolt(m_nyP,  pos_v) - a * m_Eng_Interface->GetModeDistE(0, i, j));
-//				eng->EngType::SetVolt(m_nyPP, pos_v, eng->EngType::GetVolt(m_nyPP, pos_v) - a * m_Eng_Interface->GetModeDistE(1, i, j));
+//				if (mE_nyP != 0.0)
+//					eng->EngType::SetVolt(m_nyP,  pos_v, eng->EngType::GetVolt(m_nyP,  pos_v) - a * mE_nyP * el_nyP);
+//				if (mE_nyPP != 0.0)
+//					eng->EngType::SetVolt(m_nyPP, pos_v, eng->EngType::GetVolt(m_nyPP, pos_v) - a * mE_nyPP * el_nyPP);
+				eng->EngType::SetVolt(m_nyP,  pos_v, eng->EngType::GetVolt(m_nyP,  pos_v) - a * m_Eng_Interface->GetModeDistE(0, i, j));
+				eng->EngType::SetVolt(m_nyPP, pos_v, eng->EngType::GetVolt(m_nyPP, pos_v) - a * m_Eng_Interface->GetModeDistE(1, i, j));
 
 			}
 		}
 
 		// I correction at the H plane: I_comp -= normalSign * (a/Zw) * modeH[comp][i][j] * EdgeLength_comp_dual
-		double dH_factor = -m_normalSign * a / m_Zw;
+		// Sign fix: with GetCurr - dH_factor*modeH below, a positive dH_factor
+		// yields  I_comp -= normalSign*(a/Zw)*modeH  as documented above.
+		double dH_factor = m_normalSign * a / m_Zw;
 		unsigned int pos_i[] = {0,0,0};
 		pos_i[m_ny] = m_pos_ny0_I;
 		for (unsigned int i = 0; i < numLinesH_P; ++i)
@@ -202,13 +204,13 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 				double el_nyPP_d = op->GetEdgeLength(m_nyPP, pos_i, true);
 				double mH_nyP  = m_Eng_Interface->GetModeDistH(0, i, j);
 				double mH_nyPP = m_Eng_Interface->GetModeDistH(1, i, j);
-				// Skip conductor cells (zero mode value); see note on the V loop above.
-				if (mH_nyP != 0.0)
-					eng->EngType::SetCurr(m_nyP,  pos_i, eng->EngType::GetCurr(m_nyP,  pos_i) - dH_factor * mH_nyP * el_nyP_d);
-				if (mH_nyPP != 0.0)
-					eng->EngType::SetCurr(m_nyPP, pos_i, eng->EngType::GetCurr(m_nyPP, pos_i) - dH_factor * mH_nyPP * el_nyPP_d);
-//				eng->EngType::SetCurr(m_nyP,  pos_i, eng->EngType::GetCurr(m_nyP,  pos_i) - dH_factor * m_Eng_Interface->GetModeDistH(0, i, j));
-//				eng->EngType::SetCurr(m_nyPP, pos_i, eng->EngType::GetCurr(m_nyPP, pos_i) - dH_factor * m_Eng_Interface->GetModeDistH(1, i, j));
+//				// Skip conductor cells (zero mode value); see note on the V loop above.
+//				if (mH_nyP != 0.0)
+//					eng->EngType::SetCurr(m_nyP,  pos_i, eng->EngType::GetCurr(m_nyP,  pos_i) - dH_factor * mH_nyP * el_nyP_d);
+//				if (mH_nyPP != 0.0)
+//					eng->EngType::SetCurr(m_nyPP, pos_i, eng->EngType::GetCurr(m_nyPP, pos_i) - dH_factor * mH_nyPP * el_nyPP_d);
+				eng->EngType::SetCurr(m_nyP,  pos_i, eng->EngType::GetCurr(m_nyP,  pos_i) - dH_factor * m_Eng_Interface->GetModeDistH(0, i, j));
+				eng->EngType::SetCurr(m_nyPP, pos_i, eng->EngType::GetCurr(m_nyPP, pos_i) - dH_factor * m_Eng_Interface->GetModeDistH(1, i, j));
 
 			}
 		}

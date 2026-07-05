@@ -1,7 +1,7 @@
 """
  Coaxial waveguidde with waveguide ports
 
- (c) 20@3-2025 Gadi Lahav <gadi@rfwithcare.com>
+ (c) 2023-2025 Gadi Lahav <gadi@rfwithcare.com>
 
 """
 

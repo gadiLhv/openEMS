@@ -57,7 +57,7 @@ f0 = 2.5e9
 fc = 1e9
 
 # ## FDTD setup
-FDTD = openEMS(NrTS=300000, EndCriteria=1e-4, OverSampling=50)
+FDTD = openEMS(NrTS=300000, EndCriteria=1e-4, OverSampling=4)
 FDTD.SetGaussExcite(f0, fc)
 FDTD.SetBoundaryCond(['MUR', 'MUR', 'MUR', 'MUR', 'MUR', 'MUR'])
 
