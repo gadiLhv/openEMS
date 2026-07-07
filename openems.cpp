@@ -509,7 +509,6 @@ void openEMS::SetupModalAbsorbProcessing()
 		if (!op_ext->GetEModeFileName().empty())
 			pmm_E->SetModeFileName(op_ext->GetEModeFileName());
 		pmm_E->SetModeFileOrigin(modeFileOrigin);
-		pmm_E->SetYeeConsistent(true);
 		PA->AddProcessing(pmm_E);
 
 		// Re-take for H-field, as there may be a shift due to absorption direction
@@ -530,7 +529,6 @@ void openEMS::SetupModalAbsorbProcessing()
 		if (!op_ext->GetHModeFileName().empty())
 			pmm_H->SetModeFileName(op_ext->GetHModeFileName());
 		pmm_H->SetModeFileOrigin(modeFileOrigin);
-		pmm_H->SetYeeConsistent(true);
 		PA->AddProcessing(pmm_H);
 
 		// PMM::InitProcess is called from PA->PreProcess() later. We need

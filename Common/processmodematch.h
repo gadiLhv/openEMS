@@ -72,16 +72,6 @@ public:
 	void SetModeFileOrigin(const double origin[3])
 	{ for (int n=0;n<3;++n) m_ModeFileOrigin[n] = origin[n]; m_ModeFileOriginSet = true; }
 
-	//! Yee-consistent sampling mode (for modal absorbers).
-	//! Fields are read RAW per Yee edge (no node interpolation) and the mode template
-	//! is evaluated at each component's own edge-midpoint coordinate -- the same
-	//! convention the mode-file excitation uses. This makes the measurement operator
-	//! exactly consistent with the engine's per-edge correction: subtracting
-	//! a*mode*edgeLength from the same edges is then measured back as exactly 'a'.
-	//! Without this, the absorber's measure/subtract loop has a systematic mismatch
-	//! that leaves unabsorbable residue at the plane (and can turn the loop unstable).
-	void SetYeeConsistent(bool val) { m_YeeConsistent = val; }
-
 protected:
 	//normal direction of the mode plane
 	int m_ny;
@@ -96,7 +86,6 @@ protected:
 
 	double		m_ModeFileOrigin[3];
 	bool		m_ModeFileOriginSet;
-	bool		m_YeeConsistent;
 
 	unsigned int m_numLines[2];
 	double** m_ModeDist[2];
