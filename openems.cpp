@@ -19,6 +19,7 @@
 #include <iomanip>
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include "tools/signal.h"
 #include "tools/useful.h"
 #include "FDTD/operator_cylinder.h"
@@ -35,6 +36,7 @@
 #include "FDTD/extensions/operator_ext_steadystate.h"
 #include "FDTD/extensions/operator_ext_absorbing_bc.h"
 #include "FDTD/extensions/engine_ext_steadystate.h"
+#include "FDTD/extensions/engine_ext_absorbing_bc.h"
 #include "FDTD/engine_interface_fdtd.h"
 #include "FDTD/engine_interface_cylindrical_fdtd.h"
 #include "Common/processvoltage.h"
@@ -82,6 +84,7 @@ openEMS::openEMS()
 
 	m_engine = EngineType_Multithreaded; //default engine type
 	m_engine_numThreads = 0;
+	m_modalAbsorbers = false;
 
 	m_Abort = false;
 	m_Exc = 0;
@@ -437,8 +440,14 @@ void openEMS::SetupAbsorbingSheets()
 			// Initialize all necessary parameters so the extension operator can be
 			// built later on.
 			if (op_ext_abc->SetInitParams(cPrimitive,cABCprops))
+			{
 				// Finally, add the extension
 				FDTD_Op->AddExtension(op_ext_abc);
+				// Set flag if any added absorber is of modal type (mode matching integrals
+				// are wired later in SetupModalAbsorbProcessing, after the engine is created).
+				if (op_ext_abc->GetABCtype() == Operator_Ext_Absorbing_BC::MODAL)
+					m_modalAbsorbers = true;
+			}
 			else
 			{
 				cerr << "openEMS::SetupAbsorbingSheets(): Warning: Absorbing sheet #" << sheetIdx << " setup failed.";
@@ -449,6 +458,110 @@ void openEMS::SetupAbsorbingSheets()
 
 	}
 
+}
+
+void openEMS::SetupModalAbsorbProcessing()
+{
+	for (unsigned int i = 0; i < FDTD_Op->GetNumberOfExtentions(); ++i)
+	{
+		Operator_Ext_Absorbing_BC* op_ext = dynamic_cast<Operator_Ext_Absorbing_BC*>(FDTD_Op->GetExtension(i));
+		if (!op_ext || op_ext->GetABCtype() != Operator_Ext_Absorbing_BC::MODAL)
+			continue;
+
+		Engine_Ext_Absorbing_BC* eng_ext = dynamic_cast<Engine_Ext_Absorbing_BC*>(op_ext->GetEngineExtention());
+		if (!eng_ext)
+		{
+			cerr << "openEMS::SetupModalAbsorbProcessing(): Error: No engine extension found for modal absorber sheet " << i << endl;
+			continue;
+		}
+
+		// Wave impedance is mandatory for MODAL absorbers. The CSXCAD-side
+		// default is a negative sentinel; flag callers who forgot to set it.
+		if (op_ext->GetZw() <= 0.0)
+		{
+			cerr << "openEMS::SetupModalAbsorbProcessing(): Error: Modal absorber sheet " << i
+			     << " has invalid wave impedance Zw=" << op_ext->GetZw()
+			     << " (must be > 0). Set it via AddModalAbsorber(..., Zw=<ohms>)." << endl;
+			continue;
+		}
+
+		double sheetStart[3], sheetStop[3];
+		op_ext->GetSheetBoundingBox(sheetStart, sheetStop);
+
+		// The mode file's local coordinate frame is anchored at the physical start
+		// corner of the absorber's E sheet (identical to the excitation convention,
+		// see Operator_Ext_Excitation::shiftCoordsForModeFile). Both PMMs must look
+		// up the CSV with this origin -- NOT with their own snapped start line.
+		double modeFileOrigin[3] = {sheetStart[0], sheetStart[1], sheetStart[2]};
+
+		// Build deterministic per-absorber names so the time/freq dump files have
+		// somewhere to land and the inline-init "Can't open file:" warnings go away.
+		std::stringstream nameE; nameE << "modal_absorber_" << i << "_E";
+		std::stringstream nameH; nameH << "modal_absorber_" << i << "_H";
+
+		// Create E-field mode match integral (field type 0).
+		ProcessModeMatch* pmm_E = new ProcessModeMatch(NewEngineInterface());
+		pmm_E->SetName(nameE.str());
+		pmm_E->SetFieldType(0);
+		pmm_E->GetNormalDir(op_ext->GetNy());
+		pmm_E->SetProcessInterval(1);
+		pmm_E->DefineStartStopCoord(sheetStart, sheetStop);
+		if (!op_ext->GetEModeFileName().empty())
+			pmm_E->SetModeFileName(op_ext->GetEModeFileName());
+		pmm_E->SetModeFileOrigin(modeFileOrigin);
+		PA->AddProcessing(pmm_E);
+
+		// Re-take for H-field, as there may be a shift due to absorption direction
+		op_ext->GetSheetBoundingBox(sheetStart, sheetStop, false);
+
+		// Create H-field mode match integral (field type 1).
+		// H-field lives on the dual mesh and is evaluated at half-integer timesteps.
+		// NOTE: bounding box matches the E-plane for now; indexing offset along
+		// the normal direction to land on the actual Yee H-plane is TODO.
+		ProcessModeMatch* pmm_H = new ProcessModeMatch(NewEngineInterface());
+		pmm_H->SetName(nameH.str());
+		pmm_H->SetFieldType(1);
+		pmm_H->SetDualTime(true);
+		pmm_H->SetDualMesh(true);
+		pmm_H->GetNormalDir(op_ext->GetNy());
+		pmm_H->SetProcessInterval(1);
+		pmm_H->DefineStartStopCoord(sheetStart, sheetStop);
+		if (!op_ext->GetHModeFileName().empty())
+			pmm_H->SetModeFileName(op_ext->GetHModeFileName());
+		pmm_H->SetModeFileOrigin(modeFileOrigin);
+		PA->AddProcessing(pmm_H);
+
+		// PMM::InitProcess is called from PA->PreProcess() later. We need
+		// the normalized mode distributions and num_lines available now so we
+		// can publish them through the engine interface. Force init here; the
+		// later PA->PreProcess() call will see them as already initialized.
+		pmm_E->InitProcess();
+		pmm_H->InitProcess();
+
+		unsigned int linesE[2], linesH[2];
+		pmm_E->GetNumLines(linesE);
+		pmm_H->GetNumLines(linesH);
+
+		// The PMMs snapped (and possibly boundary-clipped) their own grid start.
+		// Publish those exact indices so the engine applies its corrections on the
+		// very same cells the mode match measures -- any independent re-snap in the
+		// engine WILL disagree by one cell (dual-mesh rounding, boundary bump).
+		unsigned int startE[3], startH[3];
+		pmm_E->GetStartPos(startE);
+		pmm_H->GetStartPos(startH);
+
+		// Build a dedicated engine interface for this absorber and publish the
+		// mode-match sources through it; the engine extension reads scalars and
+		// mode-distribution samples via this mediator only (no PMM dependency).
+		Engine_Interface_FDTD* eif = NewEngineInterface();
+		eif->SetModeMatchE_Source(pmm_E->GetResults(),
+		                          pmm_E->GetModeDist(0), pmm_E->GetModeDist(1),
+		                          linesE[0], linesE[1], startE);
+		eif->SetModeMatchH_Source(pmm_H->GetResults(),
+		                          pmm_H->GetModeDist(0), pmm_H->GetModeDist(1),
+		                          linesH[0], linesH[1], startH);
+		eng_ext->SetEngineInterface(eif);
+	}
 }
 
 Engine_Interface_FDTD* openEMS::NewEngineInterface(int multigridlevel)
@@ -553,9 +666,17 @@ bool openEMS::SetupProcessing()
 				{
 					ProcessModeMatch* pmm = new ProcessModeMatch(NewEngineInterface());
 					pmm->SetFieldType(pb->GetProbeType()-10);
-					pmm->SetModeFunction(0,pb->GetAttributeValue("ModeFunctionX"));
-					pmm->SetModeFunction(1,pb->GetAttributeValue("ModeFunctionY"));
-					pmm->SetModeFunction(2,pb->GetAttributeValue("ModeFunctionZ"));
+
+					// If the data is taken from a file, store the file name
+					// in the processmodematch object
+					if (pb->GetFieldSourceIsFile())
+						pmm->SetModeFileName(pb->GetModeFileName());
+					else
+					{
+						pmm->SetModeFunction(0,pb->GetAttributeValue("ModeFunctionX"));
+						pmm->SetModeFunction(1,pb->GetAttributeValue("ModeFunctionY"));
+						pmm->SetModeFunction(2,pb->GetAttributeValue("ModeFunctionZ"));
+					}
 					proc = pmm;
 				}
 				else
@@ -981,7 +1102,6 @@ bool openEMS::Parse_XML_FDTDSetup(TiXmlElement* FDTD_Opts)
 	return true;
 }
 
-
 bool openEMS::Write2XML(TiXmlNode* rootNode)
 {
 	TiXmlElement main("openEMS");
@@ -1329,6 +1449,11 @@ int openEMS::SetupFDTD()
 		Signal::SetupHandlerForSIGINT(SIGNAL_ORIGINAL);
 		return 2;
 	}
+
+	// Wire mode-match integrals to modal absorber engine extensions.
+	// Must come after SetupProcessing() (PA exists) and CreateEngine() (Engine_Ext exists).
+	if (m_modalAbsorbers)
+		SetupModalAbsorbProcessing();
 
 	// Cleanup all unused material storages...
 	FDTD_Op->CleanupMaterialStorage();

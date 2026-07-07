@@ -33,8 +33,10 @@
 #include "operator_ext_absorbing_bc.h"
 #include "FDTD/engine.h"
 #include "FDTD/engine_sse.h"
+#include "FDTD/engine_interface_fdtd.h"
 #include "tools/array_ops.h"
 #include "tools/useful.h"
+#include "tools/global.h"
 #include "operator_ext_excitation.h"
 
 Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_ext) :
@@ -47,6 +49,8 @@ Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_e
 
 	m_Op_ABC = op_ext;
 	m_ABCtype = int(m_Op_ABC->m_ABCtype);
+
+	m_Eng_Interface = NULL;
 
 	for (unsigned int dimIdx = 0 ; dimIdx < 3 ; dimIdx++)
 	{
@@ -63,14 +67,31 @@ Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_e
 
 	bool normalSignPositive = m_Op_ABC->m_normalSignPositive;
 
+	m_Zw = m_Op_ABC->GetZw();
+	m_normalSign = normalSignPositive ? +1 : -1;
+	m_Hmm_prev = 0.0;
+	m_a_tfsf = 0.0;
+	m_a_hp_avg = 0.0;
+	m_a_lp_state = 0.0;
+
 	m_start_TS = 0;
 
 	// Initialize shifted position for V
 	m_pos_ny0_shift_V = m_posStart[m_ny] + (normalSignPositive  ? 1 : -1);
 
 	// Initialize shifted position for I. Different for super-absorption
-	m_pos_ny0_I = m_posStart[m_ny] + (normalSignPositive ? 0 : -1);
-	m_pos_ny0_shift_I = m_posStart[m_ny] + (normalSignPositive ? 1 : -2);
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MODAL)
+	{
+		// In this case, the H-field is absorbed
+		m_pos_ny0_I = m_posStart[m_ny] + (normalSignPositive ? 0 : -1);
+		m_pos_ny0_shift_I = m_posStart[m_ny] + (normalSignPositive ? 1 : -2);
+	}
+	else
+	{
+		// In this case, the H-field is absorbed
+		m_pos_ny0_I = m_Op_ABC->m_sheetX0_h[m_ny];
+		m_pos_ny0_shift_I = 0;
+	}
 
 	m_V_nyP.Init("volt_nyP",m_numLines);
 	m_V_nyPP.Init("volt_nyPP",m_numLines);
@@ -115,6 +136,176 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 	if (threadID >= m_NrThreads)
 		return;
 
+	// Modal absorber: subtract the outgoing modal component from V and I at
+	// the absorber plane. Runs on thread 0 only (no transverse parallelism for
+	// the modal path). The Mur stencil below is skipped for MODAL.
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) == Operator_Ext_Absorbing_BC::MODAL)
+	{
+		if (threadID != 0) return;
+		if (m_Eng_Interface == NULL) return;
+		if (m_Zw <= 0.0) return;
+
+		// Mode-match scalars, computed by the PMMs in PA at end of previous iter.
+		double Emm      = m_Eng_Interface->GetLastModeMatchE();
+		double Hmm_curr = m_Eng_Interface->GetLastModeMatchH();
+
+		// Time-centre H against E (H sample lags by half a step).
+		double Hmm  = 0.5 * (m_Hmm_prev + Hmm_curr);
+		m_Hmm_prev  = Hmm_curr;
+
+		// Modal amplitude of the wave leaving the domain through this absorber.
+		// The absorbed propagation direction is p = -normalSign. Template sign
+		// convention: a +ny-travelling wave measures Zw*Hmm = +Emm (c_h = +1);
+		// verified against the working waveguide-port S-parameter math, which
+		// reconstructs the incident wave as 0.5*(uf + Zref*if) from the same
+		// mode-match probes. The outgoing-wave selector is therefore
+		//   a = 0.5*(Emm + s*Zw*Hmm),  s = p*c_h = -normalSign.
+		// NOTE: this sign and dH_factor below form a pair -- always flip together.
+		double a = 0.5 * (Emm - m_normalSign * m_Zw * Hmm);
+
+		// Diagnostic aid: measure-only mode. The PMMs keep recording (dumps stay
+		// valid) but the absorber applies no correction, so the undisturbed field
+		// can be compared against the mode templates. Enable by setting the
+		// environment variable OPENEMS_ABC_MEASURE_ONLY.
+		static const bool measure_only = (getenv("OPENEMS_ABC_MEASURE_ONLY") != NULL);
+		if (measure_only)
+			return;
+
+		// DC-block the selector. The TFSF injection below is divergence-free by
+		// construction, so it can neither deposit NOR drain static charge. Static
+		// content left in the line (e.g. by an excitation whose spectrum reaches
+		// DC) biases the measurement permanently (a = E_static/2 with H = 0);
+		// reacting to it pumps radiative energy forever -> runaway. A slow
+		// single-pole high-pass removes the bias; its cutoff must sit well below
+		// the band (f_c ~ 1/(2*pi*tau*dt)). Static charge itself must be drained
+		// by a resistive element (lumped R / lossy patch) -- a curl-type absorber
+		// fundamentally cannot do that job.
+		static const char* tau_env = getenv("OPENEMS_ABC_HP_TAU");
+		const double hp_tau = tau_env ? atof(tau_env) : 20000.0;   // timesteps; <=0 disables
+		if (hp_tau > 0.0)
+		{
+			m_a_hp_avg += (a - m_a_hp_avg) / hp_tau;
+			a -= m_a_hp_avg;
+		}
+
+		// Band-limit the selector from above as well. The matched gain g=2 is a
+		// long-wavelength result; at grid-scale frequencies (lambda ~ 2-3 cells)
+		// the half-cell/half-step phase errors of the injection turn the
+		// measure->inject loop into a marginal amplifier. Observed in the coax
+		// test as a parasitic at ~191 GHz (period ~48 dt) growing with an
+		// e-folding of ~1e3 timesteps, localized at the absorber plane. A
+		// single-pole low-pass with tau few tens of dt suppresses that loop
+		// (gain ~1/(omega*tau) at grid scale) while adding only a few degrees
+		// of in-band phase lag. Cutoff must stay well above the operating band:
+		// f_c ~ 1/(2*pi*tau*dt).
+		static const char* lp_env = getenv("OPENEMS_ABC_LP_TAU");
+		const double lp_tau = lp_env ? atof(lp_env) : 30.0;   // timesteps; <=1 disables
+		if (lp_tau > 1.0)
+		{
+			m_a_lp_state += (a - m_a_lp_state) / lp_tau;
+			a = m_a_lp_state;
+		}
+
+		const Operator* op = m_Op_ABC->m_Op;
+
+		unsigned int numLinesE_P  = m_Eng_Interface->GetModeMatchE_NumLines(0);
+		unsigned int numLinesE_PP = m_Eng_Interface->GetModeMatchE_NumLines(1);
+		unsigned int numLinesH_P  = m_Eng_Interface->GetModeMatchH_NumLines(0);
+		unsigned int numLinesH_PP = m_Eng_Interface->GetModeMatchH_NumLines(1);
+
+		// Apply the corrections on EXACTLY the grid the mode-match measured:
+		// the PMM's snapped start indices (published via the interface). Snapping
+		// independently here disagrees by one cell (dual-mesh rounding / boundary
+		// clipping) and the removed "mode" no longer matches the measured one.
+		unsigned int startE[3], startH[3];
+		for (int n = 0; n < 3; ++n)
+		{
+			startE[n] = m_Eng_Interface->GetModeMatchE_Start(n);
+			startH[n] = m_Eng_Interface->GetModeMatchH_Start(n);
+		}
+
+		// TFSF-style injection gain. The stationary (DC) analysis of the reversed
+		// TFSF interface gives a matched gain that is a PURE NUMBER, g = 2,
+		// independent of mesh and timestep (the nu-scaling lives inside the
+		// injection via the operator's own update coefficients). The factor 2
+		// compensates the selector reading only half the wave at equilibrium
+		// (the H side of the plane is already annihilated). 1D validation:
+		// R < 0.02 for nu in [0.05, 0.5], R_DC ~ 5e-6, both orientations.
+		static const char* gain_env = getenv("OPENEMS_ABC_GAIN");
+		const double g_tfsf = gain_env ? atof(gain_env) : 2.0;
+		m_a_tfsf = g_tfsf * a;   // consumed again by DoPreCurrentUpdates below
+
+		// Scattered side of the interface along the normal: the outgoing wave is
+		// annihilated beyond the plane, i.e. towards -normalSign... the absorbed
+		// propagation direction p = -normalSign points INTO the scattered region.
+		const int sc = -m_normalSign;
+
+		// Transverse index offset between the E and H template grids (their PMMs
+		// snapped independently; typically one dual cell).
+		const int offP  = (int)startE[m_nyP]  - (int)startH[m_nyP];
+		const int offPP = (int)startE[m_nyPP] - (int)startH[m_nyPP];
+
+		// E-plane correction (TFSF): each tangential E edge gets the curl
+		// contribution of the PHANTOM outgoing H at its scattered-side dual
+		// neighbor, scaled by the edge's own update coefficient vi. Curl signs
+		// (Levi-Civita): volt(nyP) couples to curr(nyPP) with -vi at the +ny dual
+		// neighbor (+vi at -ny); volt(nyPP) couples to curr(nyP) with +vi (-vi).
+		// Note the CROSS templates: the E plane consumes the H mode distribution.
+		unsigned int pos_v[] = {0,0,0};
+		unsigned int pos_h[] = {0,0,0};
+		pos_v[m_ny] = startE[m_ny];
+		pos_h[m_ny] = startH[m_ny];
+		// Phantom H amplitude (field units). Unlike the phantom E below, the H
+		// field of the outgoing wave FLIPS SIGN with the propagation direction
+		// (E x H must point along p = sc), so aH carries the orientation. This
+		// sc cancels the sc of the neighbor-side curl sign in the loop below --
+		// the net E-plane injection is orientation-independent. Dropping either
+		// sc turns the near-end absorber (normal_positive=true) into a gain
+		// element: it anti-absorbs and the simulation diverges.
+		double aH = sc * m_a_tfsf / m_Zw;
+		for (unsigned int i = 0; i < numLinesE_P; ++i)
+		{
+			pos_v[m_nyP] = startE[m_nyP] + i;
+			pos_h[m_nyP] = pos_v[m_nyP];
+			int iH = (int)i + offP;
+			if ((iH < 0) || (iH >= (int)numLinesH_P)) continue;
+			for (unsigned int j = 0; j < numLinesE_PP; ++j)
+			{
+				pos_v[m_nyPP] = startE[m_nyPP] + j;
+				pos_h[m_nyPP] = pos_v[m_nyPP];
+				int jH = (int)j + offPP;
+				if ((jH < 0) || (jH >= (int)numLinesH_PP)) continue;
+
+				double mH_nyP  = m_Eng_Interface->GetModeDistH(0, iH, jH);
+				double mH_nyPP = m_Eng_Interface->GetModeDistH(1, iH, jH);
+
+				if (mH_nyPP != 0.0)
+				{
+					double dI = aH * mH_nyPP * op->GetEdgeLength(m_nyPP, pos_h, true);
+					eng->EngType::SetVolt(m_nyP, pos_v, eng->EngType::GetVolt(m_nyP, pos_v)
+					                      + sc * (-1.0) * op->GetVI(m_nyP, pos_v[0], pos_v[1], pos_v[2]) * dI);
+				}
+				if (mH_nyP != 0.0)
+				{
+					double dI = aH * mH_nyP * op->GetEdgeLength(m_nyP, pos_h, true);
+					eng->EngType::SetVolt(m_nyPP, pos_v, eng->EngType::GetVolt(m_nyPP, pos_v)
+					                      + sc * (+1.0) * op->GetVI(m_nyPP, pos_v[0], pos_v[1], pos_v[2]) * dI);
+				}
+			}
+		}
+
+		// The mirror half of the TFSF correction (phantom outgoing E in the H
+		// updates) is applied in DoPreCurrentUpdates, i.e. between the voltage
+		// and current updates -- the half-step staggering that makes the
+		// injected pair one-sided. It consumes m_a_tfsf stored above.
+		return;
+	}
+
+	// Bail out for any other non-Mur ABC type (defensive).
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST
+	 && (Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
+		return;
+
 	unsigned int pos[] = {0,0,0};
 	unsigned int pos_shift[] = {0,0,0};
 
@@ -150,6 +341,11 @@ void Engine_Ext_Absorbing_BC::DoPostVoltageUpdatesImpl(EngType* eng, int threadI
 	if (m_Eng==NULL) return;
 
 	if (threadID >= m_NrThreads)
+		return;
+
+	// Mur-only step; modal absorber does not participate here.
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST
+	 && (Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
 		return;
 
 	unsigned int pos_shift[] = {0,0,0};
@@ -188,6 +384,11 @@ void Engine_Ext_Absorbing_BC::Apply2VoltagesImpl(EngType* eng, int threadID)
 	if (threadID >= m_NrThreads)
 		return;
 
+	// Mur-only step; modal absorber does not participate here.
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST
+	 && (Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
+		return;
+
 	unsigned int pos[] = {0,0,0};
 
 	pos[m_ny] = m_posStart[m_ny];
@@ -222,6 +423,77 @@ void Engine_Ext_Absorbing_BC::DoPreCurrentUpdatesImpl(EngType* eng, int threadID
 
 	if (threadID >= m_NrThreads)
 		return;
+
+	// Modal absorber, TFSF mirror half: each tangential H edge on the absorber's
+	// dual plane gets the curl contribution of the PHANTOM outgoing E at its
+	// scattered-side neighbor plane, scaled by the edge's own update coefficient
+	// iv. Runs between the voltage and current updates (correct staggering).
+	// Curl signs: curr(nyP) couples to volt(nyPP) with +iv at the +ny neighbor
+	// (-iv at -ny); curr(nyPP) couples to volt(nyP) with -iv (+iv).
+	// Cross templates again: the H plane consumes the E mode distribution.
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) == Operator_Ext_Absorbing_BC::MODAL)
+	{
+		if (threadID != 0) return;
+		if (m_Eng_Interface == NULL) return;
+		if (m_a_tfsf == 0.0) return;
+
+		const Operator* op = m_Op_ABC->m_Op;
+		const int sc = -m_normalSign;
+
+		unsigned int numLinesE_P  = m_Eng_Interface->GetModeMatchE_NumLines(0);
+		unsigned int numLinesE_PP = m_Eng_Interface->GetModeMatchE_NumLines(1);
+		unsigned int numLinesH_P  = m_Eng_Interface->GetModeMatchH_NumLines(0);
+		unsigned int numLinesH_PP = m_Eng_Interface->GetModeMatchH_NumLines(1);
+
+		unsigned int startE[3], startH[3];
+		for (int n = 0; n < 3; ++n)
+		{
+			startE[n] = m_Eng_Interface->GetModeMatchE_Start(n);
+			startH[n] = m_Eng_Interface->GetModeMatchH_Start(n);
+		}
+		const int offP  = (int)startH[m_nyP]  - (int)startE[m_nyP];
+		const int offPP = (int)startH[m_nyPP] - (int)startE[m_nyPP];
+
+		// The scattered-side E plane neighboring the H plane: for sc=+1 (far) the
+		// H plane (dual k) couples forward to volt at k+1; for sc=-1 (near) the H
+		// plane (dual k = E-plane-1) couples backward to volt at k (= startH[m_ny]).
+		unsigned int pos_i[] = {0,0,0};
+		unsigned int pos_e[] = {0,0,0};
+		pos_i[m_ny] = startH[m_ny];
+		pos_e[m_ny] = (sc > 0) ? startH[m_ny] + 1 : startH[m_ny];
+
+		for (unsigned int i = 0; i < numLinesH_P; ++i)
+		{
+			pos_i[m_nyP] = startH[m_nyP] + i;
+			pos_e[m_nyP] = pos_i[m_nyP];
+			int iE = (int)i + offP;
+			if ((iE < 0) || (iE >= (int)numLinesE_P)) continue;
+			for (unsigned int j = 0; j < numLinesH_PP; ++j)
+			{
+				pos_i[m_nyPP] = startH[m_nyPP] + j;
+				pos_e[m_nyPP] = pos_i[m_nyPP];
+				int jE = (int)j + offPP;
+				if ((jE < 0) || (jE >= (int)numLinesE_PP)) continue;
+
+				double mE_nyP  = m_Eng_Interface->GetModeDistE(0, iE, jE);
+				double mE_nyPP = m_Eng_Interface->GetModeDistE(1, iE, jE);
+
+				if (mE_nyPP != 0.0)
+				{
+					double dV = m_a_tfsf * mE_nyPP * op->GetEdgeLength(m_nyPP, pos_e, false);
+					eng->EngType::SetCurr(m_nyP, pos_i, eng->EngType::GetCurr(m_nyP, pos_i)
+					                      + sc * (+1.0) * op->GetIV(m_nyP, pos_i[0], pos_i[1], pos_i[2]) * dV);
+				}
+				if (mE_nyP != 0.0)
+				{
+					double dV = m_a_tfsf * mE_nyP * op->GetEdgeLength(m_nyP, pos_e, false);
+					eng->EngType::SetCurr(m_nyPP, pos_i, eng->EngType::GetCurr(m_nyPP, pos_i)
+					                      + sc * (-1.0) * op->GetIV(m_nyPP, pos_i[0], pos_i[1], pos_i[2]) * dV);
+				}
+			}
+		}
+		return;
+	}
 
 	unsigned int 	pos[] = {0,0,0},
 					pos_shift[] = {0,0,0};
@@ -330,7 +602,9 @@ void Engine_Ext_Absorbing_BC::Apply2CurrentImpl(EngType* eng, int threadID)
 
 	unsigned int pos[] = {0,0,0};
 
-	// If this isn't the appropriate boundary type, move on to the next primitive
+	// Super-absorption is the only ABC type that touches currents here. Skip
+	// for plain Mur and for the modal absorber (the latter does its work in
+	// DoPreVoltageUpdatesImpl).
 	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
 		return;
 
@@ -353,11 +627,8 @@ void Engine_Ext_Absorbing_BC::Apply2CurrentImpl(EngType* eng, int threadID)
 			// H(i + s,n) = (Hsa*K2 + Hc)/(1 + K2)
 			eng->EngType::SetCurr(m_nyP ,pos, (m_I_nyP (i,j)*m_K2_nyP (i,j) + eng->EngType::GetCurr(m_nyP ,pos))/(m_K2_nyP (i,j) + 1.0));
 			eng->EngType::SetCurr(m_nyPP,pos, (m_I_nyPP(i,j)*m_K2_nyPP(i,j) + eng->EngType::GetCurr(m_nyPP,pos))/(m_K2_nyPP(i,j) + 1.0));
-
-
 		}
 	}
-
 }
 
 void Engine_Ext_Absorbing_BC::Apply2Current(int threadID)

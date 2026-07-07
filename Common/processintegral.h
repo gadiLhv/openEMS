@@ -57,6 +57,10 @@ public:
 	//! This method will write the TD and FD dump files using CalcIntegral() to calculate the integral parameter
 	virtual int Process();
 
+	//! Read-only access to the last computed results array (size given by GetNumberOfIntegrals()).
+	//! Valid after at least one call to Process(). Index 0 is the integral value.
+	const double* GetResults() const { return m_Results; }
+
 protected:
 	ProcessIntegral(Engine_Interface_Base* eng_if);
 

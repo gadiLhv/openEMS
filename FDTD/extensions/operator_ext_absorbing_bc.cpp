@@ -58,6 +58,7 @@ void Operator_Ext_Absorbing_BC::Initialize()
 	m_ABCtype = ABCtype::UNDEFINED;
 
 	m_phaseVelocity = 0.0;
+	m_Zw = 0.0;
 }
 
 bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbingBC* abc_prop)
@@ -74,6 +75,15 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 	// Check that this is actually a sheet
 	// Get box start and stop positions
 
+
+	// Store physical bounding box coordinates before snapping, for use by SetupModalAbsorbProcessing.
+	const double* dStart_phys = cSheet->GetStartCoord()->GetCoords(m_Op->m_MeshType);
+	const double* dStop_phys  = cSheet->GetStopCoord()->GetCoords(m_Op->m_MeshType);
+	for (int n = 0; n < 3; ++n)
+	{
+		m_dSheetStart[n] = dStart_phys[n];
+		m_dSheetStop[n]  = dStop_phys[n];
+	}
 
 	// snap to the native coordinate system
 	int Snap_Dimension =
@@ -126,9 +136,50 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 		m_phaseVelocity = __C0__;
 	}
 
-	// Copy all of the relevant data, so BuildExtension ca0n work
+	// Copy all of the relevant data, so BuildExtension can work
 	m_ABCtype = (ABCtype)(abc_prop->GetAbsorbingBoundaryType());
 	m_normalSignPositive = abc_prop->GetNormalSignPositive();
+	m_EModeFileName = abc_prop->GetEModeFileName();
+	m_HModeFileName = abc_prop->GetHModeFileName();
+	m_Zw = abc_prop->GetWaveImpedance();
+
+	// Now the H-Field PMM coordinates
+	// * Start by detecting the ePMM index
+
+	for (unsigned int iy = 0 ; iy < 3 ; iy++)
+	{
+		m_sheetX0_h[iy] = m_sheetX0[iy];
+		m_sheetX1_h[iy] = m_sheetX1[iy];
+	}
+
+	// Determine correct shift and notify user if it slides out of bounding box
+	unsigned int hShift = (unsigned int)m_normalSignPositive;
+	// Shift one index back if this is catching negative direction propgating waves
+	if ((m_normalSignPositive && (m_sheetX0_h[m_ny] == 0)) || (!m_normalSignPositive && (m_sheetX0_h[m_ny] == (m_Op->GetNumberOfLines(m_ny) - 1))))
+	{
+		cerr 	<< "Operator_Ext_Absorbing_BC::SetInitParams(): Warning: Trying to set local absorber on bonding box edge. Results will be erroneous"
+				<< " ID: " << prim->GetID() << " @ Property: " << abc_prop->GetName() << endl;
+
+		hShift = 0;
+	}
+
+	// Copy data
+	for (unsigned int iy = 0 ; iy < 3 ; iy++)
+	{
+		m_sheetX0_h[iy] = m_sheetX0[iy];
+		m_sheetX1_h[iy] = m_sheetX1[iy];
+
+		m_hSheetStart[iy] = m_dSheetStart[iy];
+		m_hSheetStop[iy]  = m_dSheetStop[iy];
+	}
+	// Update shifted coordinates for h-field
+	m_sheetX0_h[m_ny] = m_sheetX1_h[m_ny] = m_sheetX0[m_ny] - hShift;
+	// Update for the H-field sheet (PMM). The H mode-match runs on the DUAL mesh,
+	// so hand it the dual-node coordinate of the intended plane: a primary-line
+	// coordinate would be re-snapped onto the dual grid and can round to the
+	// neighboring dual plane (observed: one cell off along the normal).
+	m_hSheetStop[m_ny] = m_hSheetStart[m_ny] = m_Op->GetDiscLine(m_ny, m_sheetX1_h[m_ny], true);
+
 
 	prim->SetPrimitiveUsed(true);
 
@@ -254,8 +305,11 @@ bool Operator_Ext_Absorbing_BC::BuildExtension()
 
 Engine_Extension* Operator_Ext_Absorbing_BC::CreateEngineExtention()
 {
-	Engine_Ext_Absorbing_BC* eng_ext = new Engine_Ext_Absorbing_BC(this);
-	return eng_ext;
+	// Assigning to the base m_Eng_Ext is what makes GetEngineExtention() return
+	// this instance later (matches the Operator_Ext_SteadyState pattern).
+	// Without this, SetupModalAbsorbProcessing can't reach the engine extension.
+	m_Eng_Ext = new Engine_Ext_Absorbing_BC(this);
+	return m_Eng_Ext;
 }
 
 void Operator_Ext_Absorbing_BC::ShowStat(std::ostream &ostr) const
@@ -265,6 +319,17 @@ void Operator_Ext_Absorbing_BC::ShowStat(std::ostream &ostr) const
 	ostr << " Total cells: " << m_numCells << endl;
 }
 
+void Operator_Ext_Absorbing_BC::GetSheetBoundingBox(double start[3], double stop[3], bool Efield) const
+{
+	const double* startArr = Efield ? m_dSheetStart : m_hSheetStart;
+	const double* stopArr  = Efield ? m_dSheetStop  : m_hSheetStop ;
+
+	for (int n = 0; n < 3; ++n)
+	{
+		start[n] = startArr[n];
+		stop[n] = stopArr[n];
+	}
+}
 
 
 

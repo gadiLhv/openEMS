@@ -19,6 +19,7 @@
 #define PROCESSMODEMATCH_H
 
 #include "processintegral.h"
+#include "CSModeFileParser.h"
 
 class CSFunctionParser;
 
@@ -45,8 +46,31 @@ public:
 	//! Set the mode function in the given direction ny. For example: SetModeFunction(0,"cos(pi/1000*x)*sin(pi/500*y)");
 	void SetModeFunction(int ny, std::string function);
 
-	virtual int GetNumberOfIntegrals() const {return 2;}
-	virtual double* CalcMultipleIntegrals();
+	void		SetModeFileName(std::string fileName);
+	std::string GetModeFileName() {return m_ModeFileName;};
+	bool		GetFieldSourceIsFile() {return m_FieldSourceIsFile;};
+	void		SetFieldSourceIsFile(bool isFile) {m_FieldSourceIsFile = isFile;};
+
+	virtual int		GetNumberOfIntegrals() const {return 2;}
+	virtual double*	CalcMultipleIntegrals();
+
+	//! Access the precomputed mode distribution for field component 0 (nyP) or 1 (nyPP).
+	//! Valid only after InitProcess() has been called.
+	const double* const* GetModeDist(int component) const { return m_ModeDist[component]; }
+
+	//! Fill \p lines with the number of grid lines in each transverse dimension.
+	void GetNumLines(unsigned int lines[2]) const { lines[0] = m_numLines[0]; lines[1] = m_numLines[1]; }
+
+	//! Fill \p s with the snapped start indices of the mode plane (valid after InitProcess).
+	//! Consumers applying per-cell corrections MUST use these indices, not their own snap.
+	void GetStartPos(unsigned int s[3]) const { for (int n=0;n<3;++n) s[n] = start[n]; }
+
+	//! Set the local-frame origin (drawing units) used to look up mode-file coordinates.
+	//! Must be the physical start corner of the defining primitive box (the same frame
+	//! the excitation uses via shiftCoordsForModeFile). Without it the origin falls back
+	//! to the snapped start mesh line, which on the dual mesh is offset by half a cell.
+	void SetModeFileOrigin(const double origin[3])
+	{ for (int n=0;n<3;++n) m_ModeFileOrigin[n] = origin[n]; m_ModeFileOriginSet = true; }
 
 protected:
 	//normal direction of the mode plane
@@ -54,12 +78,14 @@ protected:
 
 	int m_ModeFieldType;
 
-	double GetField(int ny, const unsigned int pos[3]);
-	double GetEField(int ny, const unsigned int pos[3]);
-	double GetHField(int ny, const unsigned int pos[3]);
-
 	std::string m_ModeFunction[3];
 	CSFunctionParser* m_ModeParser[2];
+
+	std::string m_ModeFileName;
+	bool		m_FieldSourceIsFile;
+
+	double		m_ModeFileOrigin[3];
+	bool		m_ModeFileOriginSet;
 
 	unsigned int m_numLines[2];
 	double** m_ModeDist[2];

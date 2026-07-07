@@ -325,9 +325,53 @@ cdef class openEMS:
                 if start[n] != stop[n]:
                     grid.AddLine(n, stop[n])
         return port
+        
+    def AddModalAbsorber(self, start, stop, p_dir, E_file, H_file,
+                         normal_positive=True, phase_velocity=None, Zw=-1.0, priority=0):
+        """ AddModalAbsorber(start, stop, p_dir, E_file, H_file, normal_positive=True, phase_velocity=None, Zw=-1.0, priority=0)
 
-    def AddWaveGuidePort(self, port_nr, start, stop, p_dir, E_func, H_func, kc, excite=0, **kw):
-        """ AddWaveGuidePort(self, port_nr, start, stop, p_dir, E_func, H_func, kc, excite=0, **kw)
+        Add a modal absorbing boundary condition sheet.
+
+        The absorber terminates a single guided mode described by the CSV mode
+        files ``E_file`` and ``H_file``.  The sheet must be flat along the
+        propagation direction ``p_dir``.
+
+        Parameters
+        ----------
+        start, stop : array-like, length 3
+            Bounding box corners.  ``start[p_dir]`` must equal ``stop[p_dir]``.
+        p_dir : str or int
+            Propagation direction ('x'/'y'/'z' or 0/1/2).
+        E_file : str
+            Path to the E-field mode CSV file.
+        H_file : str
+            Path to the H-field mode CSV file.
+        normal_positive : bool
+            True when the absorber is at the high end of the waveguide
+            (wave travels in the positive p_dir direction).
+        phase_velocity : float, optional
+            Phase velocity override (m/s).  Uses C0 when omitted.
+        Zw : float
+            Wave impedance of the mode in Ohms.  Must be strictly positive;
+            the default (-1) is a sentinel that triggers a simulation-setup
+            error to flag callers who forgot to provide it.
+        priority : int
+            CSXCAD primitive priority.
+
+        See Also
+        --------
+        openEMS.ports.ModalAbsorber
+        """
+        if self.__CSX is None:
+            raise Exception('AddModalAbsorber: CSX is not set!')
+        return ports.ModalAbsorber(self.__CSX, start, stop, p_dir, E_file, H_file,
+                                   normal_positive=normal_positive,
+                                   phase_velocity=phase_velocity,
+                                   Zw=Zw,
+                                   priority=priority)
+
+    def AddWaveGuidePort(self, port_nr, start, stop, p_dir, E_func = None, H_func = None, kc = 0.0, excite = 0, excite_type = 0, E_file = None, H_file = None, **kw):
+        """ AddWaveGuidePort(self, port_nr, start, stop, p_dir, E_func = None, H_func = None, kc = 0.0, excite = 0, excite_type = 0, E_file = None, H_file = None, **kw)
 
         Add a arbitrary waveguide port.
 
@@ -337,7 +381,7 @@ cdef class openEMS:
         """
         if self.__CSX is None:
             raise Exception('AddWaveGuidePort: CSX is not set!')
-        return ports.WaveguidePort(self.__CSX, port_nr, start, stop, p_dir, E_func, H_func, kc, excite, **kw)
+        return ports.WaveguidePort(self.__CSX, port_nr, start, stop, p_dir, E_func, H_func, kc, excite, excite_type, E_file, H_file, **kw)
 
     def AddRectWaveGuidePort(self, port_nr, start, stop, p_dir, a, b, mode_name, excite=0, **kw):
         """ AddRectWaveGuidePort(port_nr, start, stop, p_dir, a, b, mode_name, excite=0, **kw)

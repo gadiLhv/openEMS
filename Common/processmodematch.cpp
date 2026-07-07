@@ -1,5 +1,6 @@
 /*
 *	Copyright (C) 2010 Thorsten Liebig (Thorsten.Liebig@gmx.de)
+*	Copyright (C) 2025 Gadi Lahav <gadi@rfwithcare.com>
 *
 *	This program is free software: you can redistribute it and/or modify
 *	it under the terms of the GNU General Public License as published by
@@ -31,6 +32,16 @@ ProcessModeMatch::ProcessModeMatch(Engine_Interface_Base* eng_if) : ProcessInteg
 	}
 	delete[] m_Results;
 	m_Results = new double[2];
+
+	m_ModeFieldType = 0;
+	m_ny = 0;
+
+	m_ModeFileName.clear();
+	m_FieldSourceIsFile = false;
+
+	m_ModeFileOriginSet = false;
+	for (int n=0; n<3; ++n)
+		m_ModeFileOrigin[n] = 0.0;
 }
 
 ProcessModeMatch::~ProcessModeMatch()
@@ -71,6 +82,11 @@ string ProcessModeMatch::GetProcessingName() const
 void ProcessModeMatch::InitProcess()
 {
 	if (!Enabled) return;
+
+	// Idempotency guard: modal absorbers force-init us early to publish the
+	// mode distribution to their engine interface; PA->PreProcess() will then
+	// call us a second time and we must not reallocate or re-parse.
+	if (m_ModeDist[0] != NULL) return;
 
 	if (m_Eng_Interface==NULL)
 	{
@@ -117,16 +133,20 @@ void ProcessModeMatch::InitProcess()
 	m_numLines[0] = stop[nP] - start[nP] + 1;
 	m_numLines[1] = stop[nPP] - start[nPP] + 1;
 
-	for (int n=0; n<2; ++n)
+	// Check that this isn't a custom mode, before running this test
+	if (!m_FieldSourceIsFile)
 	{
-		int ny = (m_ny+n+1)%3;
-		int res = m_ModeParser[n]->Parse(m_ModeFunction[ny], "x,y,z,rho,a,r,t");
-		if (res >= 0)
+		for (int n=0; n<2; ++n)
 		{
-			cerr << "ProcessModeMatch::InitProcess(): Warning, an error occurred parsing the mode matching function (see below) ..." << endl;
-			cerr << m_ModeFunction[ny] << "\n" << string(res, ' ') << "^\n" << m_ModeParser[n]->ErrorMsg() << "\n";
-			SetEnable(false);
-			Reset();
+			int ny = (m_ny+n+1)%3;
+			int res = m_ModeParser[n]->Parse(m_ModeFunction[ny], "x,y,z,rho,a,r,t");
+			if (res >= 0)
+			{
+				cerr << "ProcessModeMatch::InitProcess(): Warning, an error occurred parsing the mode matching function (see below) ..." << endl;
+				cerr << m_ModeFunction[ny] << "\n" << string(res, ' ') << "^\n" << m_ModeParser[n]->ErrorMsg() << "\n";
+				SetEnable(false);
+				Reset();
+			}
 		}
 	}
 
@@ -144,7 +164,20 @@ void ProcessModeMatch::InitProcess()
 	discLine[m_ny] = Op->GetDiscLine(m_ny,pos[m_ny],dualMesh);
 	double norm = 0;
 	double area = 0;
-	for (unsigned int posP = 0; posP<m_numLines[0]; ++posP)
+
+	// Remove 1 from the number of lines if this is a magentic field. It samples 1 cell too many
+	if (dualMesh)
+	{
+		m_numLines[0]--;
+		m_numLines[1]--;
+	}
+
+	// If necessary, parse the file now
+	CSModeFileParser modeFile;
+	if (m_FieldSourceIsFile)
+		modeFile.ParseFile(m_ModeFileName);
+
+	for (unsigned int posP = 0; posP < m_numLines[0]; ++posP)
 	{
 		pos[nP] = start[nP] + posP;
 		discLine[nP] = Op->GetDiscLine(nP,pos[nP],dualMesh);
@@ -171,14 +204,33 @@ void ProcessModeMatch::InitProcess()
 				var[6] = asin(1)-atan(var[2]/var[3]); //theta (t)
 			}
 			area = Op->GetNodeArea(m_ny,pos,dualMesh);
-			for (int n=0; n<2; ++n)
+
+			if (m_FieldSourceIsFile)
 			{
-				m_ModeDist[n][posP][posPP] = m_ModeParser[n]->Eval(var); //calc mode template
-				if ((std::isnan(m_ModeDist[n][posP][posPP])) || (std::isinf(m_ModeDist[n][posP][posPP])))
-					m_ModeDist[n][posP][posPP] = 0.0;
-				norm += pow(m_ModeDist[n][posP][posPP],2) * area;
+				// Mode-file coordinates are local to the defining box's physical start
+				// corner (like the excitation's shiftCoordsForModeFile). Fall back to
+				// the snapped start line only if no origin was provided -- NOTE: on the
+				// dual mesh that fallback origin is offset by half a cell.
+				double locCoord[3];
+				for (int n=0; n<3; ++n)
+					locCoord[n] = discLine[n] - (m_ModeFileOriginSet ? m_ModeFileOrigin[n]
+					                                                 : Op->GetDiscLine(n,start[n],dualMesh));
+
+				modeFile.LinInterp2(locCoord[nP],locCoord[nPP],m_ModeDist[0][posP][posPP],m_ModeDist[1][posP][posPP]);
 			}
-//			cerr << discLine[0] << " " << discLine[1] << " : " << m_ModeDist[0][posP][posPP] << " , " << m_ModeDist[1][posP][posPP] << endl;
+			else
+				for (int n = 0; n < 2; ++n)
+				{
+					m_ModeDist[n][posP][posPP] = m_ModeParser[n]->Eval(var); //calc mode template
+					if ((std::isnan(m_ModeDist[n][posP][posPP])) || (std::isinf(m_ModeDist[n][posP][posPP])))
+						m_ModeDist[n][posP][posPP] = 0.0;
+
+				}
+
+			// Second pass, for normalization
+			for (int n=0; n<2; ++n)
+				norm += pow(m_ModeDist[n][posP][posPP],2) * area;
+
 		}
 	}
 
@@ -208,11 +260,12 @@ void ProcessModeMatch::Reset()
 	}
 }
 
-
 void ProcessModeMatch::SetModeFunction(int ny, string function)
 {
 	if ((ny<0) || (ny>2)) return;
 	m_ModeFunction[ny] = function;
+
+	this->m_ModeFileName.clear();
 }
 
 void ProcessModeMatch::SetFieldType(int type)
@@ -264,4 +317,13 @@ double* ProcessModeMatch::CalcMultipleIntegrals()
 		m_Results[1] = 0;
 	m_Results[0] = value;
 	return m_Results;
+}
+
+void ProcessModeMatch::SetModeFileName(std::string fileName)
+{
+	if (fileName.length())
+	{
+		m_ModeFileName = fileName;
+		m_FieldSourceIsFile = true;
+	}
 }

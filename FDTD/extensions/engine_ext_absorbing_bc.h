@@ -25,6 +25,7 @@
 #include "tools/arraylib/array_ij.h"
 
 class Operator_Ext_Absorbing_BC;
+class Engine_Interface_FDTD;
 
 class Engine_Ext_Absorbing_BC : public Engine_Extension
 {
@@ -47,6 +48,8 @@ public:
 	virtual void DoPostCurrentUpdates(int threadID);
 	virtual void Apply2Current() {Engine_Ext_Absorbing_BC::Apply2Current(0);}
 	virtual void Apply2Current(int threadID);
+
+	void SetEngineInterface(Engine_Interface_FDTD* eng_if) {m_Eng_Interface=eng_if;}
 
 protected:
 	Operator_Ext_Absorbing_BC* m_Op_ABC;
@@ -98,6 +101,16 @@ protected:
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_V_nyPP;	// Storage for voltage, direction n + 2
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_I_nyP;	// Storage for currents, direction n + 1
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_I_nyPP;	// Storage for currents, direction n + 2
+
+	Engine_Interface_FDTD* m_Eng_Interface;
+
+	// Modal absorber state
+	double		m_Zw;			// Wave impedance of the mode (Ohms)
+	int			m_normalSign;	// +1 if normalSignPositive, -1 otherwise
+	double		m_Hmm_prev;		// H mode-match value from the previous half-timestep (for time averaging)
+	double		m_a_tfsf;	// gain-scaled outgoing amplitude, carried from the pre-voltage (E-side) to the pre-current (H-side) TFSF correction
+	double		m_a_hp_avg;	// running mean of the selector output (DC-blocking high-pass state)
+	double		m_a_lp_state;	// band-limiting low-pass state of the selector output (grid-scale parasitic suppression)
 
 
 };
