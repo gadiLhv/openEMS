@@ -50,8 +50,8 @@ SimBox = np.array([
             coax_L + Airbox_Add])
 
 # setup FDTD parameter & excitation function
-f0 = 2.5e9  # center frequency
-fc = 1e9  # 20 dB corner frequency
+f0 = 1.75e9  # center frequency
+fc = 1.25e9  # 20 dB corner frequency
 
 # ## FDTD setup
 # # * Limit the simulation to 30k timesteps

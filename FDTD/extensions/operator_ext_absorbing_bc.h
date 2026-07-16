@@ -78,6 +78,13 @@ public:
 
 	ABCtype GetABCtype() const { return m_ABCtype; }
 	int GetNy() const { return m_ny; }
+
+	//! Sheet start/stop grid indices (set by SetInitParams). Used by the
+	//! charge-drain extension that shadows this sheet.
+	const unsigned int* GetSheetX0() const { return m_sheetX0; }
+	const unsigned int* GetSheetX1() const { return m_sheetX1; }
+	bool GetNormalSignPositive() const { return m_normalSignPositive; }
+
 	std::string GetEModeFileName() const { return m_EModeFileName; }
 	std::string GetHModeFileName() const { return m_HModeFileName; }
 	double GetZw() const { return m_Zw; }

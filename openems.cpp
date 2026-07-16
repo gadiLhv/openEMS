@@ -35,6 +35,7 @@
 #include "FDTD/extensions/operator_ext_conductingsheet.h"
 #include "FDTD/extensions/operator_ext_steadystate.h"
 #include "FDTD/extensions/operator_ext_absorbing_bc.h"
+#include "FDTD/extensions/operator_ext_dc_drain.h"
 #include "FDTD/extensions/engine_ext_steadystate.h"
 #include "FDTD/extensions/engine_ext_absorbing_bc.h"
 #include "FDTD/engine_interface_fdtd.h"
@@ -447,6 +448,34 @@ void openEMS::SetupAbsorbingSheets()
 				// are wired later in SetupModalAbsorbProcessing, after the engine is created).
 				if (op_ext_abc->GetABCtype() == Operator_Ext_Absorbing_BC::MODAL)
 					m_modalAbsorbers = true;
+
+				// Optional boundary backing damper ("DC removal"): a wave/
+				// impedance ABC reflects DC/near-DC content, stalling
+				// convergence. When OPENEMS_DC_DRAIN is set, shadow each Mur/SIBC
+				// sheet with a damper that dissipates the field in the cell(s)
+				// behind the sheet (outside the region of interest), bleeding off
+				// the trapped static energy. Opt-in via environment, so no CSXCAD
+				// property or Python setup is required.
+				Operator_Ext_Absorbing_BC::ABCtype abcType = op_ext_abc->GetABCtype();
+				if (getenv("OPENEMS_DC_DRAIN") != NULL
+				    && (abcType == Operator_Ext_Absorbing_BC::MUR_1ST
+				     || abcType == Operator_Ext_Absorbing_BC::MUR_1ST_SA))
+				{
+					double dc_alpha = 0.05;
+					const char* alpha_env = getenv("OPENEMS_DC_DRAIN_ALPHA");
+					if (alpha_env != NULL)
+						dc_alpha = atof(alpha_env);
+					int dc_cells = 1;
+					const char* cells_env = getenv("OPENEMS_DC_DRAIN_CELLS");
+					if (cells_env != NULL)
+						dc_cells = atoi(cells_env);
+					Operator_Ext_DC_Drain* op_ext_drain =
+						new Operator_Ext_DC_Drain(FDTD_Op, op_ext_abc, dc_alpha, dc_cells);
+					FDTD_Op->AddExtension(op_ext_drain);
+					cerr << "openEMS::SetupAbsorbingSheets(): DC backing damper enabled "
+					     << "(alpha=" << dc_alpha << ", cells=" << dc_cells
+					     << ") on absorbing sheet #" << sheetIdx << endl;
+				}
 			}
 			else
 			{
