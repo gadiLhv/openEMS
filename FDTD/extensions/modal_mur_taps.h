@@ -52,7 +52,12 @@ namespace ModalMur
 	//! Design the per-cell one-way delay FIR exp(-j*beta*dz).
 	/*!
 	  \param fc       modal cutoff [Hz]. May be zero or NEGATIVE; negative is
-	                  taken as kc^2 = -(2*pi*fc/c0)^2 (TEM / quasi-TEM lines).
+	                  taken as kc^2 = -(2*pi*fc/v)^2 (TEM / quasi-TEM lines).
+	  \param v        wave speed of the medium filling the guide [m/s]. c0 for
+	                  an air guide; c0/sqrt(eps_r) for a dielectric-filled line
+	                  such as a PTFE coax. It enters BOTH the lattice relation
+	                  and the conversion fc -> kc = 2*pi*fc/v, so getting it
+	                  wrong misplaces the cutoff as well as the dispersion.
 	  \param dz       spacing between the read plane and the sheet plane [m].
 	  \param dt       FDTD timestep [s].
 	  \param numTaps  FIR length (compile-time predef at the call site).
@@ -66,7 +71,7 @@ namespace ModalMur
 	                  negative time. Small (~1e-4) for a well-posed target.
 	  \return false if the parameters are unusable (non-positive dz/dt/numTaps).
 	  */
-	bool DesignDelayTaps(double fc, double dz, double dt, unsigned int numTaps,
+	bool DesignDelayTaps(double fc, double v, double dz, double dt, unsigned int numTaps,
 	                     std::vector<double>& taps,
 	                     double& maxAbsH, double& acausalFrac);
 }

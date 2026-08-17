@@ -371,8 +371,8 @@ cdef class openEMS:
                                    priority=priority)
 
     def AddModalMurAbsorber(self, start, stop, p_dir, E_file, fc,
-                            normal_positive=True, priority=0):
-        """ AddModalMurAbsorber(start, stop, p_dir, E_file, fc, normal_positive=True, priority=0)
+                            normal_positive=True, phase_velocity=None, priority=0):
+        """ AddModalMurAbsorber(start, stop, p_dir, E_file, fc, normal_positive=True, phase_velocity=None, priority=0)
 
         Add a Dispersive Modal Mur absorbing sheet (one-way modal termination).
 
@@ -397,6 +397,10 @@ cdef class openEMS:
         fc : float
             Modal cutoff frequency in Hz.  May be zero or negative; negative
             means kc^2 < 0, which is how TEM/quasi-TEM lines are expressed.
+            Use 0.0 for an ideal TEM line.
+        phase_velocity : float, optional
+            Wave speed of the guide's medium (m/s), default C0.  Dielectric-
+            filled lines MUST set it (C0/sqrt(eps_r) for a PTFE coax).
         normal_positive : bool
             True when the guide lies at HIGHER index than the sheet (the sheet
             terminates the low-coordinate end); False for the high end.
@@ -411,6 +415,7 @@ cdef class openEMS:
             raise Exception('AddModalMurAbsorber: CSX is not set!')
         return ports.ModalMurAbsorber(self.__CSX, start, stop, p_dir, E_file, fc,
                                       normal_positive=normal_positive,
+                                      phase_velocity=phase_velocity,
                                       priority=priority)
 
     def AddWaveGuidePort(self, port_nr, start, stop, p_dir, E_func = None, H_func = None, kc = 0.0, excite = 0, excite_type = 0, E_file = None, H_file = None, **kw):

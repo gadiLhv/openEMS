@@ -41,7 +41,7 @@
 
 #include "CSPropAbsorbingBC.h"
 
-//! FIR length of the Modal Mur per-cell delay, in taps.
+//! Starting FIR length of the Modal Mur per-cell delay, in taps.
 /*!
   Deliberately a compile-time predef and NOT a user parameter. Its only
   effect is how faithfully the truncated filter reproduces exp(-j*beta*dz),
@@ -51,6 +51,27 @@
   tap count from 256 upward -- there is nothing here worth exposing.
   */
 #define MODAL_MUR_NTAPS 512
+
+//! Hard ceiling for the adaptive tap growth (see MODAL_MUR_MAX_ABS_H).
+/*!
+  512 taps is not universally enough. The kernel has to span the ONE-CELL
+  TRANSIT TIME in timesteps, dz/(v*dt) = 1/nu, and nu is a property of the
+  caller's mesh, not of the absorber: a line whose transverse mesh is much
+  finer than its longitudinal one drives dt down while dz stays put. The
+  PTFE coax test lands at nu = 0.0083, i.e. 120 timesteps per cell, and 512
+  taps cannot represent that delay plus its dispersion tail -- measured
+  max|H| = 1.066, which is NOT passive and will pump energy.
+  */
+#define MODAL_MUR_NTAPS_MAX 8192
+
+//! Passivity target the adaptive tap growth aims for.
+/*!
+  |exp(-j*beta*dz)| <= 1 exactly, so any excess here is pure truncation
+  error. Passivity is the one property the whole scheme rests on, so the
+  filter is grown until the REALISED response respects it (or the ceiling is
+  hit, which is then reported loudly).
+  */
+#define MODAL_MUR_MAX_ABS_H 1.02
 
 class Operator_Ext_Absorbing_BC : public Operator_Extension
 {

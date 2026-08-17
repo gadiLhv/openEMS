@@ -40,7 +40,7 @@ namespace
 	const double MODAL_MUR_TAPER_FRAC = 0.15;
 }
 
-bool ModalMur::DesignDelayTaps(double fc, double dz, double dt,
+bool ModalMur::DesignDelayTaps(double fc, double v, double dz, double dt,
                                unsigned int numTaps,
                                std::vector<double>& taps,
                                double& maxAbsH, double& acausalFrac)
@@ -49,19 +49,17 @@ bool ModalMur::DesignDelayTaps(double fc, double dz, double dt,
 	maxAbsH = 0.0;
 	acausalFrac = 0.0;
 
-	if ((dz <= 0.0) || (dt <= 0.0) || (numTaps == 0))
+	if ((dz <= 0.0) || (dt <= 0.0) || (v <= 0.0) || (numTaps == 0))
 		return false;
 
 	unsigned int Md = MODAL_MUR_DFT_LEN;
 	while (Md < 4 * numTaps)
 		Md *= 2;
 
-	const double c0 = __C0__;
-
 	// Signed squared cutoff. A negative fc is deliberate and means kc^2 < 0:
 	// TEM and quasi-TEM lines cut off at (or numerically just below) DC, and
 	// this keeps the whole design real instead of forcing complex arithmetic.
-	const double kc  = 2.0 * M_PI * fc / c0;
+	const double kc  = 2.0 * M_PI * fc / v;
 	const double kc2 = (fc < 0.0) ? -(kc * kc) : (kc * kc);
 
 	// ---- sample the target on the one-sided DFT grid ----------------------
@@ -75,7 +73,7 @@ bool ModalMur::DesignDelayTaps(double fc, double dz, double dt,
 
 		// Exact discrete lattice dispersion relation, same relation the
 		// S-parameter de-embedding uses.
-		double argd = (2.0 / (c0 * dt)) * (2.0 / (c0 * dt)) * sn * sn - kc2;
+		double argd = (2.0 / (v * dt)) * (2.0 / (v * dt)) * sn * sn - kc2;
 		double sarg = 0.5 * dz * sqrt(fabs(argd));
 
 		// THREE regimes, all with |D| <= 1. Note dz cancels out of every

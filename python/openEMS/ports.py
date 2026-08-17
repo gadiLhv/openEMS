@@ -694,8 +694,14 @@ class ModalMurAbsorber:
         Path to the CSV file for the E-field mode shape.  No H file is needed.
     fc : float
         Modal cutoff frequency in Hz.  May be zero or NEGATIVE: a negative value
-        means kc^2 = -(2*pi*fc/c0)^2, which is how TEM and quasi-TEM lines (coax,
+        means kc^2 = -(2*pi*fc/v)^2, which is how TEM and quasi-TEM lines (coax,
         CPW) are expressed without complex arithmetic in the tap generator.
+        Use 0.0 for an ideal TEM line.
+    phase_velocity : float, optional
+        Wave speed of the medium filling the guide (m/s).  Defaults to C0.
+        A dielectric-filled line MUST set this -- C0/sqrt(eps_r) for a PTFE
+        coax -- because it sets both the lattice dispersion and the cutoff
+        conversion kc = 2*pi*fc/v.
     normal_positive : bool
         True when the guide lies at HIGHER index than the sheet, i.e. the sheet
         terminates the low-coordinate end.  False for the high-coordinate end.
@@ -704,7 +710,7 @@ class ModalMurAbsorber:
     """
 
     def __init__(self, CSX, start, stop, prop_dir, E_file, fc,
-                 normal_positive=True, priority=0):
+                 normal_positive=True, phase_velocity=None, priority=0):
         from CSXCAD.CSProperties import ABCtype
 
         self.CSX = CSX
@@ -722,6 +728,8 @@ class ModalMurAbsorber:
             EModeFileName         = E_file,
             CutOffFrequency       = fc,
         )
+        if phase_velocity is not None:
+            kw['PhaseVelocity'] = phase_velocity
 
         self.abc_prop = CSX.AddAbsorbingBC(prop_name, **kw)
         self.abc_prop.AddBox(start, stop, priority=priority)

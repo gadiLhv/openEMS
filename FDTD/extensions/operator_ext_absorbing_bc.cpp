@@ -453,28 +453,56 @@ bool Operator_Ext_Absorbing_BC::BuildModalMur()
 		}
 
 	// ---- per-cell delay taps -----------------------------------------------
+	//  The kernel must span the one-cell transit time in timesteps,
+	//  1/nu = dz/(v*dt), which is set by the CALLER's mesh: a line whose
+	//  transverse mesh is much finer than its longitudinal one pushes dt down
+	//  while dz stays put, and the delay stretches to hundreds of samples.
+	//  So grow the filter until the REALISED response is passive, rather than
+	//  trusting one fixed length. The length stays an internal matter -- it is
+	//  never a user parameter -- and the growth is reported so a pathological
+	//  mesh is visible rather than silent.
+	//
+	//  m_phaseVelocity is the medium's wave speed (C0 unless the caller set
+	//  it). A dielectric-filled line MUST set it: c0/sqrt(eps_r) for a coax.
 	double maxAbsH = 0.0, acausalFrac = 0.0;
-	if (!ModalMur::DesignDelayTaps(m_CutOffFrequency, m_MurDz, m_Op->GetTimestep(),
-	                               MODAL_MUR_NTAPS, m_MurTaps, maxAbsH, acausalFrac))
-	{
-		cerr << "Operator_Ext_Absorbing_BC::BuildModalMur(): Error: delay tap design failed." << endl;
-		return false;
-	}
+	unsigned int nTaps = MODAL_MUR_NTAPS;
+	const double nu = m_phaseVelocity * m_Op->GetTimestep() / m_MurDz;
 
-	// Passivity is the property this whole scheme rests on: |exp(-j*beta*dz)|
-	// never exceeds 1, so the termination cannot pump energy no matter what
-	// sits behind it. Truncating the kernel can break that, and if it is broken
-	// the run grows without bound -- so say so now, not an hour into the solve.
-	if (maxAbsH > 1.05)
-		cerr << "Operator_Ext_Absorbing_BC::BuildModalMur(): Warning: realised max|H| = " << maxAbsH
-		     << " exceeds 1: the truncated delay filter is NOT passive and this absorber may grow."
-		     << " Check that fc and the local cell size are sane." << endl;
+	while (true)
+	{
+		if (!ModalMur::DesignDelayTaps(m_CutOffFrequency, m_phaseVelocity, m_MurDz,
+		                               m_Op->GetTimestep(),
+		                               nTaps, m_MurTaps, maxAbsH, acausalFrac))
+		{
+			cerr << "Operator_Ext_Absorbing_BC::BuildModalMur(): Error: delay tap design failed." << endl;
+			return false;
+		}
+
+		if (maxAbsH <= MODAL_MUR_MAX_ABS_H)
+			break;
+
+		if (nTaps >= MODAL_MUR_NTAPS_MAX)
+		{
+			// Out of room. Say exactly what is wrong and what to change: the
+			// mesh is the lever here, not anything the absorber can fix.
+			cerr << "Operator_Ext_Absorbing_BC::BuildModalMur(): Warning: realised max|H| = "
+			     << maxAbsH << " > " << MODAL_MUR_MAX_ABS_H << " even at " << nTaps
+			     << " taps, so the delay filter is NOT passive and this absorber may pump energy."
+			     << " The mesh is the cause: nu = v*dt/dz = " << nu << " means "
+			     << (1.0 / nu) << " timesteps of transit per cell. Coarsen the transverse"
+			     << " mesh (which raises dt) or refine the mesh along the propagation"
+			     << " direction near the sheet." << endl;
+			break;
+		}
+		nTaps *= 2;
+	}
 
 	if (g_settings.GetVerboseLevel() > 0)
 		cerr << "Operator_Ext_Absorbing_BC: Modal Mur, ny=" << m_ny
 		     << " sheet=" << deployPos << " read=" << m_MurReadPos
-		     << " dz=" << m_MurDz << " m, fc=" << m_CutOffFrequency << " Hz, "
-		     << MODAL_MUR_NTAPS << " taps, max|H|=" << maxAbsH
+		     << " dz=" << m_MurDz << " m, fc=" << m_CutOffFrequency
+		     << " Hz, v=" << m_phaseVelocity << " m/s, nu=" << nu
+		     << ", " << nTaps << " taps, max|H|=" << maxAbsH
 		     << ", acausal=" << acausalFrac << endl;
 
 	m_MurReady = true;
