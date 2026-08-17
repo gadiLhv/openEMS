@@ -7,6 +7,11 @@
 
  THE METHOD
  ----------
+ mode_type='TE' selects it: a TE mode has a real cutoff, so no scalar wave
+ impedance can work near it. (A TEM line has no cutoff, Zw is constant, and
+ mode_type='TEM' takes the cheaper scalar absorber instead -- see the coax and
+ CPW tests.)
+
  The sheet's modal component is overwritten every timestep with the delayed
  modal amplitude one cell inside,
 
@@ -142,10 +147,11 @@ kc_TE10 = np.pi / (wg_a * unit)  # 1/m, for the dispersive port math
 #  normal_positive=True: the guide lies at HIGHER index than the sheet, so the
 #  read plane is one cell in the +z direction.
 abs_z = Zz.item(idxAbs1)
-modal_mur_1 = FDTD.AddModalMurAbsorber([0.0, 0.0, abs_z], [wg_a, wg_b, abs_z], 'z',
-                                       E_file=E_mode_file,
-                                       fc=fc_abs,
-                                       normal_positive=True)
+modal_mur_1 = FDTD.AddModalAbsorber([0.0, 0.0, abs_z], [wg_a, wg_b, abs_z], 'z',
+                                    E_file=E_mode_file,
+                                    mode_type='TE',      # -> dispersive Modal Mur
+                                    fc=fc_abs,
+                                    normal_positive=True)
 
 # --- Port 1: waveguide port with excitation (mode files, TE -> excite_type 0) ---
 start = [0.0, 0.0, Zz.item(idxPort1 + 0)]
@@ -166,10 +172,11 @@ port2 = FDTD.AddWaveGuidePort(2, start, stop, 'z',
 # --- Absorber 2: terminates the high-z PEC face ------------------------------
 #  normal_positive=False: the guide lies at LOWER index, read plane is -z.
 abs_z = Zz.item(idxAbs2)
-modal_mur_2 = FDTD.AddModalMurAbsorber([0.0, 0.0, abs_z], [wg_a, wg_b, abs_z], 'z',
-                                       E_file=E_mode_file,
-                                       fc=fc_abs,
-                                       normal_positive=False)
+modal_mur_2 = FDTD.AddModalAbsorber([0.0, 0.0, abs_z], [wg_a, wg_b, abs_z], 'z',
+                                    E_file=E_mode_file,
+                                    mode_type='TE',      # -> dispersive Modal Mur
+                                    fc=fc_abs,
+                                    normal_positive=False)
 
 # Define dump box...
 # Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)

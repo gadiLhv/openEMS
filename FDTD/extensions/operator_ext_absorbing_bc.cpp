@@ -157,6 +157,27 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 	m_CutOffFrequency = abc_prop->GetCutOffFrequency();
 	m_CutOffFrequencySet = abc_prop->IsCutOffFrequencySet();
 
+	// ---- resolve the method from the declared mode -------------------------
+	//  The caller states the PHYSICS; the solver picks the machinery, because
+	//  the two are not independent.
+	//
+	//  A TEM (or quasi-TEM) line has no cutoff, so Zw = eta is a CONSTANT. The
+	//  failure that forced the one-way reformulation in the first place -- Zw
+	//  singular at cutoff and reactive below it, so a direction test E = +-Zw*H
+	//  cannot work there -- simply does not arise. The scalar absorber is
+	//  therefore adequate over a wide band on those lines, and it costs no
+	//  filter, no delay history and no tap storage. TE and TM modes do have a
+	//  cutoff and do need the one-way termination.
+	if ((m_ABCtype == ABCtype::MODAL)
+	 && (abc_prop->GetModeType() != CSPropAbsorbingBC::MODE_TEM))
+	{
+		m_ABCtype = ABCtype::MODAL_MUR;
+		if (g_settings.GetVerboseLevel() > 0)
+			cerr << "Operator_Ext_Absorbing_BC: mode type is "
+			     << ((abc_prop->GetModeType() == CSPropAbsorbingBC::MODE_TE) ? "TE" : "TM")
+			     << " -> using the dispersive Modal Mur termination." << endl;
+	}
+
 	// Now the H-Field PMM coordinates
 	// * Start by detecting the ePMM index
 

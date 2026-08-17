@@ -570,51 +570,91 @@ class RectWGPort(WaveguidePort):
 ###############################################################################
 class ModalAbsorber:
     """
-    Modal absorbing boundary condition.
+    Modal absorbing boundary condition for a single guided mode.
 
-    Places a CSPropAbsorbingBC sheet of type MODAL at the given location.
-    The E and H mode shapes are loaded from CSV files at simulation time by
-    the openEMS engine via ProcessModeMatch.
+    Which METHOD is used follows from ``mode_type``, because the physics and
+    the machinery are not independent:
+
+    ``mode_type='TEM'`` (default, also for quasi-TEM lines such as CPW and
+        microstrip): the mode has no cutoff, so its wave impedance Zw is a
+        constant. The failure that forced the one-way reformulation for
+        waveguides -- Zw singular at cutoff and reactive below it, so a
+        direction test E = +-Zw*H cannot work there -- simply does not arise.
+        A scalar Zw absorber is adequate over a wide band and costs no filter,
+        no delay history and no tap storage.  Requires ``Zw`` and ``H_file``.
+
+    ``mode_type='TE'`` or ``'TM'``: dispersive, with a real cutoff, so no
+        scalar Zw can work near it. Resolves to the one-way "Dispersive Modal
+        Mur" termination, which overwrites the modal component of the sheet
+        plane with the delayed amplitude one cell inside,
+
+            a_sheet(w) = a_inside(w) * exp(-j*beta(w)*dz)
+
+        with beta from the exact discrete lattice dispersion relation. It needs
+        no impedance and no H mode file, only ``fc``.
+
+    Placement (TE/TM)
+    -----------------
+    Put the sheet **directly on the face of the PEC block** terminating the
+    guide. The one-way condition is an overwrite, so whatever lies behind the
+    sheet is driven but can never drive back: a gap becomes a sealed cavity
+    that fills with energy it can never release. That trapped energy does not
+    affect the guide at all (measured: the guide's decay is identical to
+    1e-13 dB whether the gap is 0 or 10 cells), but it does stall any global
+    energy-based convergence test. openEMS does not verify that a PEC block is
+    present -- that is the caller's responsibility.
 
     Parameters
     ----------
     CSX : ContinuousStructure
     start, stop : array-like, length 3
-        Bounding box of the absorber sheet.  The sheet must be flat (i.e.
-        ``start[prop_dir] == stop[prop_dir]``).
+        Bounding box of the sheet.  Must be flat along ``prop_dir``.
     prop_dir : str or int
         Propagation direction ('x', 'y', 'z', or 0/1/2).
     E_file : str
-        Path to the CSV file for the E-field mode shape.
-    H_file : str
-        Path to the CSV file for the H-field mode shape.
+        CSV file for the E-field mode shape.
+    mode_type : str
+        'TEM' (default), 'TE' or 'TM'.
+    H_file : str, optional
+        CSV file for the H-field mode shape.  Required for TEM.
+    Zw : float
+        Wave impedance of the mode in Ohms.  Required for TEM.
+    fc : float, optional
+        Modal cutoff frequency in Hz.  Required for TE/TM.  May be negative,
+        meaning kc^2 = -(2*pi*fc/v)^2.
     normal_positive : bool
-        True if the absorber faces incoming energy arriving from the negative
-        direction (i.e. the absorber is at the high end of the waveguide).
-        False if the energy arrives from the positive direction.
+        True when the guide lies at HIGHER index than the sheet, i.e. the sheet
+        terminates the low-coordinate end.  False for the high-coordinate end.
     phase_velocity : float, optional
-        Phase velocity of the mode (m/s).  Defaults to C0 (inside CSXCAD).
-    normal_zero : str or CSXCAD.CSProperties.NormalZeroType
-        Zero the field component(s) normal to the sheet: 'none' (default),
-        'E', 'H' or 'both'.  A NormalZeroType enum value is accepted as well.
-    fc : float
-        Analytic cutoff frequency of the mode in Hz.  fc > 0 enables the
-        wideband FIR absorber (beta = sqrt(k0^2 - kc^2) dispersion); fc < 0
-        is interpreted as fc^2 < 0 (TEM convention, reserved); fc = 0
-        (default) keeps the dispersion-less scalar absorber using Zw.
-    dc_bleed : bool
-        Enable the DC bleeder fail-safe (default False).  Relevant for
-        TEM/QTEM modes: their DC content cannot leave through the modal
-        correction and parks at the sheet; when a frozen field is detected
-        there the plane is bled gently (x0.999 per step).
+        Wave speed of the guide's medium (m/s), default C0.  Dielectric-filled
+        lines should set it -- C0/sqrt(eps_r) -- since for TE/TM it sets both
+        the lattice dispersion and the cutoff conversion kc = 2*pi*fc/v.
     priority : int
         CSXCAD primitive priority.
     """
 
-    def __init__(self, CSX, start, stop, prop_dir, E_file, H_file,
-                 normal_positive=True, phase_velocity=None, Zw=-1.0,
-                 normal_zero='none', fc=0.0, dc_bleed=False, priority=0):
-        from CSXCAD.CSProperties import ABCtype, NormalZeroType
+    _MODES = {'TEM': 0, 'TE': 1, 'TM': 2}
+
+    def __init__(self, CSX, start, stop, prop_dir, E_file, mode_type='TEM',
+                 H_file=None, Zw=-1.0, fc=None,
+                 normal_positive=True, phase_velocity=None, priority=0):
+        from CSXCAD.CSProperties import ABCtype, ModeType
+
+        mt = str(mode_type).upper()
+        if mt not in self._MODES:
+            raise ValueError("ModalAbsorber: mode_type must be one of 'TEM', 'TE', 'TM'")
+
+        if mt == 'TEM':
+            if H_file is None:
+                raise ValueError("ModalAbsorber: mode_type='TEM' uses the scalar Zw "
+                                 "absorber, which needs H_file")
+            if Zw is None or Zw <= 0.0:
+                raise ValueError("ModalAbsorber: mode_type='TEM' uses the scalar Zw "
+                                 "absorber, which needs a positive Zw")
+        else:
+            if fc is None:
+                raise ValueError("ModalAbsorber: mode_type='%s' is dispersive and needs "
+                                 "fc, the modal cutoff frequency in Hz" % mt)
 
         self.CSX = CSX
         self.start = np.array(start, dtype=float)
@@ -622,115 +662,27 @@ class ModalAbsorber:
         self.prop_dir = CheckNyDir(prop_dir)
         self.E_file = E_file
         self.H_file = H_file
-        self.normal_positive = normal_positive
-
-        if isinstance(normal_zero, str):
-            nz_map = {'none': NormalZeroType.ZERO_NONE,
-                      'e'   : NormalZeroType.ZERO_E,
-                      'h'   : NormalZeroType.ZERO_H,
-                      'both': NormalZeroType.ZERO_BOTH}
-            if normal_zero.lower() not in nz_map:
-                raise ValueError("normal_zero must be 'none', 'E', 'H' or 'both' (got '{}')".format(normal_zero))
-            normal_zero = nz_map[normal_zero.lower()]
-        self.normal_zero = normal_zero
-
-        prop_name = 'modal_absorber_{}'.format(id(self))
-        kw = dict(
-            NormalSignPositive   = normal_positive,
-            AbsorbingBoundaryType = ABCtype.MODAL,
-            EModeFileName        = E_file,
-            HModeFileName        = H_file,
-            WaveImpedance        = Zw,
-            NormalZeroType       = normal_zero,
-            CutOffFrequency      = fc,
-            DCBleed              = dc_bleed,
-        )
-        if phase_velocity is not None:
-            kw['PhaseVelocity'] = phase_velocity
-
-        self.abc_prop = CSX.AddAbsorbingBC(prop_name, **kw)
-        self.abc_prop.AddBox(start, stop, priority=priority)
-
-
-class ModalMurAbsorber:
-    """
-    Dispersive Modal Mur absorbing boundary condition (one-way modal termination).
-
-    Places a CSPropAbsorbingBC sheet of type MODAL_MUR at the given location.
-    The sheet's modal component is overwritten every timestep with the delayed
-    modal amplitude one cell inside,
-
-        a_sheet(w) = a_inside(w) * exp(-j*beta(w)*dz)
-
-    where beta comes from the exact discrete lattice dispersion relation. The
-    delay has |exp(-j*beta*dz)| <= 1 everywhere, so the termination is passive
-    by construction: it needs no wave impedance, no drain cap and no stability
-    guard, and evanescent content below cutoff is handled exactly (a real decay
-    per cell) instead of being misread by a direction test that cannot work
-    there.
-
-    Placement
-    ---------
-    Put the sheet **directly on the face of the PEC block** that terminates the
-    guide. Because the condition is an overwrite, whatever lies behind the sheet
-    is driven but can never drive back -- so a gap between the sheet and the PEC
-    becomes a sealed cavity that fills with energy it can never release. That
-    trapped energy does not affect the guide at all (measured: the guide's decay
-    is identical to 1e-13 dB whether the gap is 0 or 10 cells), but it does stall
-    any global energy-based convergence test. With the sheet on the PEC face
-    there is no such region and the problem cannot arise.
-
-    openEMS does **not** verify that a PEC block is actually there; that is the
-    caller's responsibility.
-
-    Parameters
-    ----------
-    CSX : ContinuousStructure
-    start, stop : array-like, length 3
-        Bounding box of the absorber sheet.  Must be flat along ``prop_dir``.
-    prop_dir : str or int
-        Propagation direction ('x', 'y', 'z', or 0/1/2).
-    E_file : str
-        Path to the CSV file for the E-field mode shape.  No H file is needed.
-    fc : float
-        Modal cutoff frequency in Hz.  May be zero or NEGATIVE: a negative value
-        means kc^2 = -(2*pi*fc/v)^2, which is how TEM and quasi-TEM lines (coax,
-        CPW) are expressed without complex arithmetic in the tap generator.
-        Use 0.0 for an ideal TEM line.
-    phase_velocity : float, optional
-        Wave speed of the medium filling the guide (m/s).  Defaults to C0.
-        A dielectric-filled line MUST set this -- C0/sqrt(eps_r) for a PTFE
-        coax -- because it sets both the lattice dispersion and the cutoff
-        conversion kc = 2*pi*fc/v.
-    normal_positive : bool
-        True when the guide lies at HIGHER index than the sheet, i.e. the sheet
-        terminates the low-coordinate end.  False for the high-coordinate end.
-    priority : int
-        CSXCAD primitive priority.
-    """
-
-    def __init__(self, CSX, start, stop, prop_dir, E_file, fc,
-                 normal_positive=True, phase_velocity=None, priority=0):
-        from CSXCAD.CSProperties import ABCtype
-
-        self.CSX = CSX
-        self.start = np.array(start, dtype=float)
-        self.stop  = np.array(stop,  dtype=float)
-        self.prop_dir = CheckNyDir(prop_dir)
-        self.E_file = E_file
+        self.mode_type = mt
         self.fc = fc
         self.normal_positive = normal_positive
 
-        prop_name = 'modal_mur_absorber_{}'.format(id(self))
+        prop_name = 'modal_absorber_{}'.format(id(self))
         kw = dict(
             NormalSignPositive    = normal_positive,
-            AbsorbingBoundaryType = ABCtype.MODAL_MUR,
+            AbsorbingBoundaryType = ABCtype.MODAL,
             EModeFileName         = E_file,
-            CutOffFrequency       = fc,
+            ModeType              = [ModeType.MODE_TEM,
+                                     ModeType.MODE_TE,
+                                     ModeType.MODE_TM][self._MODES[mt]],
         )
+        if H_file is not None:
+            kw['HModeFileName'] = H_file
+        if Zw is not None:
+            kw['WaveImpedance'] = Zw
+        if fc is not None:
+            kw['CutOffFrequency'] = fc
         if phase_velocity is not None:
             kw['PhaseVelocity'] = phase_velocity
 
         self.abc_prop = CSX.AddAbsorbingBC(prop_name, **kw)
         self.abc_prop.AddBox(start, stop, priority=priority)
-

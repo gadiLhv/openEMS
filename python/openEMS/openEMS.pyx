@@ -326,15 +326,26 @@ cdef class openEMS:
                     grid.AddLine(n, stop[n])
         return port
         
-    def AddModalAbsorber(self, start, stop, p_dir, E_file, H_file,
-                         normal_positive=True, phase_velocity=None, Zw=-1.0, priority=0):
-        """ AddModalAbsorber(start, stop, p_dir, E_file, H_file, normal_positive=True, phase_velocity=None, Zw=-1.0, priority=0)
+    def AddModalAbsorber(self, start, stop, p_dir, E_file, mode_type='TEM',
+                         H_file=None, Zw=-1.0, fc=None,
+                         normal_positive=True, phase_velocity=None, priority=0):
+        """ AddModalAbsorber(start, stop, p_dir, E_file, mode_type='TEM', H_file=None, Zw=-1.0, fc=None, normal_positive=True, phase_velocity=None, priority=0)
 
-        Add a modal absorbing boundary condition sheet.
+        Add a modal absorbing boundary condition sheet for a single guided mode.
 
-        The absorber terminates a single guided mode described by the CSV mode
-        files ``E_file`` and ``H_file``.  The sheet must be flat along the
-        propagation direction ``p_dir``.
+        The METHOD follows from ``mode_type``:
+
+        * ``'TEM'`` (default; also for quasi-TEM lines like CPW/microstrip) --
+          no cutoff, so Zw is constant and the scalar Zw absorber is adequate
+          over a wide band. Needs ``Zw`` and ``H_file``.
+        * ``'TE'`` / ``'TM'`` -- dispersive with a real cutoff, where no scalar
+          Zw works. Resolves to the one-way Dispersive Modal Mur termination,
+          which needs only ``fc`` (no impedance, no H mode file).
+
+        For TE/TM, place the sheet DIRECTLY ON the face of the PEC block that
+        terminates the guide; a gap behind it becomes a sealed cavity that
+        stalls global energy convergence tests. openEMS does not check that a
+        PEC block is there.
 
         Parameters
         ----------
@@ -344,17 +355,20 @@ cdef class openEMS:
             Propagation direction ('x'/'y'/'z' or 0/1/2).
         E_file : str
             Path to the E-field mode CSV file.
-        H_file : str
-            Path to the H-field mode CSV file.
-        normal_positive : bool
-            True when the absorber is at the high end of the waveguide
-            (wave travels in the positive p_dir direction).
-        phase_velocity : float, optional
-            Phase velocity override (m/s).  Uses C0 when omitted.
+        mode_type : str
+            'TEM' (default), 'TE' or 'TM'.
+        H_file : str, optional
+            Path to the H-field mode CSV file.  Required for TEM.
         Zw : float
-            Wave impedance of the mode in Ohms.  Must be strictly positive;
-            the default (-1) is a sentinel that triggers a simulation-setup
-            error to flag callers who forgot to provide it.
+            Wave impedance of the mode in Ohms.  Required for TEM.
+        fc : float, optional
+            Modal cutoff frequency in Hz.  Required for TE/TM.  May be
+            negative, meaning kc^2 < 0.
+        normal_positive : bool
+            True when the guide lies at HIGHER index than the sheet.
+        phase_velocity : float, optional
+            Wave speed of the guide's medium (m/s), default C0.  Dielectric-
+            filled lines should set it (C0/sqrt(eps_r)).
         priority : int
             CSXCAD primitive priority.
 
@@ -364,59 +378,14 @@ cdef class openEMS:
         """
         if self.__CSX is None:
             raise Exception('AddModalAbsorber: CSX is not set!')
-        return ports.ModalAbsorber(self.__CSX, start, stop, p_dir, E_file, H_file,
+        return ports.ModalAbsorber(self.__CSX, start, stop, p_dir, E_file,
+                                   mode_type=mode_type,
+                                   H_file=H_file,
+                                   Zw=Zw,
+                                   fc=fc,
                                    normal_positive=normal_positive,
                                    phase_velocity=phase_velocity,
-                                   Zw=Zw,
                                    priority=priority)
-
-    def AddModalMurAbsorber(self, start, stop, p_dir, E_file, fc,
-                            normal_positive=True, phase_velocity=None, priority=0):
-        """ AddModalMurAbsorber(start, stop, p_dir, E_file, fc, normal_positive=True, phase_velocity=None, priority=0)
-
-        Add a Dispersive Modal Mur absorbing sheet (one-way modal termination).
-
-        The sheet's modal component is overwritten each timestep with the
-        delayed modal amplitude one cell inside, a(sheet) = a(inside) *
-        exp(-j*beta*dz), with beta taken from the exact discrete lattice
-        dispersion relation. Needs no wave impedance and no H mode file.
-
-        Place the sheet DIRECTLY ON the face of the PEC block terminating the
-        guide. A gap between sheet and PEC becomes a sealed cavity: harmless to
-        the guide, but it stalls global energy convergence tests. openEMS does
-        not check that a PEC block is present -- that is up to the caller.
-
-        Parameters
-        ----------
-        start, stop : array-like, length 3
-            Bounding box corners.  ``start[p_dir]`` must equal ``stop[p_dir]``.
-        p_dir : str or int
-            Propagation direction ('x'/'y'/'z' or 0/1/2).
-        E_file : str
-            Path to the E-field mode CSV file.
-        fc : float
-            Modal cutoff frequency in Hz.  May be zero or negative; negative
-            means kc^2 < 0, which is how TEM/quasi-TEM lines are expressed.
-            Use 0.0 for an ideal TEM line.
-        phase_velocity : float, optional
-            Wave speed of the guide's medium (m/s), default C0.  Dielectric-
-            filled lines MUST set it (C0/sqrt(eps_r) for a PTFE coax).
-        normal_positive : bool
-            True when the guide lies at HIGHER index than the sheet (the sheet
-            terminates the low-coordinate end); False for the high end.
-        priority : int
-            CSXCAD primitive priority.
-
-        See Also
-        --------
-        openEMS.ports.ModalMurAbsorber
-        """
-        if self.__CSX is None:
-            raise Exception('AddModalMurAbsorber: CSX is not set!')
-        return ports.ModalMurAbsorber(self.__CSX, start, stop, p_dir, E_file, fc,
-                                      normal_positive=normal_positive,
-                                      phase_velocity=phase_velocity,
-                                      priority=priority)
 
     def AddWaveGuidePort(self, port_nr, start, stop, p_dir, E_func = None, H_func = None, kc = 0.0, excite = 0, excite_type = 0, E_file = None, H_file = None, **kw):
         """ AddWaveGuidePort(self, port_nr, start, stop, p_dir, E_func = None, H_func = None, kc = 0.0, excite = 0, excite_type = 0, E_file = None, H_file = None, **kw)
