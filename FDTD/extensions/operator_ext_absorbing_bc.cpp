@@ -448,6 +448,35 @@ bool Operator_Ext_Absorbing_BC::BuildModalMur()
 			if (i + 1 == m_numLines[0]) vP  = 0.0;
 			if (j + 1 == m_numLines[1]) vPP = 0.0;
 
+			// MASK OUT CONDUCTOR EDGES. A mode file is not obliged to be zero
+			// inside metal, and a coax CSV built from the analytic 1/r profile
+			// is emphatically not: it keeps rising toward the centre, so the
+			// template carries a mean amplitude inside the PEC inner conductor
+			// comparable to the one in the dielectric.
+			//
+			// For the injection absorber that was survivable, because it
+			// SUBTRACTS a bounded correction. For this one it is fatal: the
+			// deploy OVERWRITES E on those edges every timestep, and although
+			// the operator re-zeroes them on the next voltage update, the
+			// current update in between has already seen them. That is an
+			// injected source once per step, and the run diverges (measured on
+			// the PTFE coax: energy grew by 15 orders of magnitude).
+			//
+			// The operator already knows which edges are conductors -- a PEC
+			// edge has a zero voltage-update coefficient -- so ask it rather
+			// than trusting the mode file to have been masked.
+			//
+			// Ask on the READ plane, not the deploy plane. The deploy plane is
+			// meant to BE a PEC face, so every edge on it reads zero there and
+			// testing it would blank the whole template. The read plane is
+			// interior, so a zero there is genuine metal -- and any conductor
+			// running along the guide (a coax centre wire, a CPW strip) pierces
+			// both planes alike.
+			unsigned int posR[3] = {pos[0], pos[1], pos[2]};
+			posR[m_ny] = m_MurReadPos;
+			if (m_Op->GetVV(m_nyP,  posR) == 0.0) vP  = 0.0;
+			if (m_Op->GetVV(m_nyPP, posR) == 0.0) vPP = 0.0;
+
 			m_MurModeP(i,j)  = vP;
 			m_MurModePP(i,j) = vPP;
 
