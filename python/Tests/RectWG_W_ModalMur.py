@@ -178,7 +178,7 @@ modal_mur_2 = FDTD.AddModalAbsorber([0.0, 0.0, abs_z], [wg_a, wg_b, abs_z], 'z',
                                     fc=fc_abs,
                                     normal_positive=False)
 
-# Define dump box...
+### Field export -- disabled. Uncomment to dump E(t) over the whole guide.
 # Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
 # Et.AddBox([0.0, 0.0, 0.0], [wg_a, wg_b, wg_L])
 
@@ -269,6 +269,19 @@ for i, fi in enumerate(f_tab):
 band = (f >= 1.4e9) & (f <= 2.9e9)
 print('\nworst GATED |Gamma| over 1.4-2.9 GHz: {:.2f} dB   <-- the absorber'.format(np.max(gam_dB[band])))
 print('worst port |S11|  over 1.4-2.9 GHz: {:.2f} dB   <-- the de-embedding floor'.format(np.max(s11_dB[band])))
+
+# Energy balance sanity check. In a lossless line |S11|^2 + |S21|^2 must be <= 1.
+# A value meaningfully above 1 means the port de-embedding is not separating
+# incident from reflected consistently, and the |S11| column above is then
+# reporting the de-embedding rather than the absorber. This is a property of
+# WaveguidePort.CalcPort, not of the termination.
+# Restricted to the PROPAGATING band: below cutoff the S-parameters are taken
+# against an evanescent (reactive) reference and are not wave quantities, so an
+# energy balance is meaningless down there.
+bal = (np.abs(s11).ravel() ** 2 + np.abs(s21).ravel() ** 2)[band]
+print('energy balance |S11|^2+|S21|^2 over 1.4-2.9 GHz: min {:.3f}  max {:.3f}{}'.format(
+      bal.min(), bal.max(),
+      '   <-- ABOVE 1: |S11| is de-embed limited, not the absorber' if bal.max() > 1.02 else ''))
 
 figure()
 plot(f / 1e9, gam_dB, 'r-', linewidth=2, label='$|\\Gamma|$ time-gated (the absorber)')

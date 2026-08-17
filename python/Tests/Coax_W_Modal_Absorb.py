@@ -28,7 +28,7 @@ shutil.copy("Coax_Er.csv", Sim_Path)
 shutil.copy("Coax_Hr.csv", Sim_Path)
 
 post_proc_only = False
-display_structure = True
+display_structure = False
 
 # substrate setup
 coax_D             = 2
@@ -142,12 +142,21 @@ abs_stop  = [ coax_D * 0.5 + coax_shield_thick,  coax_D * 0.5 + coax_shield_thic
 modal_abs_1 = FDTD.AddModalAbsorber(abs_start, abs_stop, 'z',
                                     E_file="Coax_Er.csv",
                                     H_file="Coax_Hr.csv",
+                                    mode_type='TEM',   # no cutoff -> scalar Zw
                                     normal_positive=True,
                                     Zw=238.26517157)
 
 
-# --- Absorber: modal absorber replacing the second waveguide port ---
-# The sheet is placed at the mesh line just outside the waveguide end.
+# --- Port 2: passive waveguide port, for the S21 measurement ---
+# Reversed z ordering so the port faces the incoming +z wave, exactly as in
+# RectWG_W_ModalMur.py. It sits one cell inside absorber 2.
+start = [-coax_D * 0.5 - coax_shield_thick, -coax_D * 0.5 - coax_shield_thick, Zz.item(idxPort2 - 0)]
+stop  = [ coax_D * 0.5 + coax_shield_thick,  coax_D * 0.5 + coax_shield_thick, Zz.item(idxPort2 - 1)]
+port2 = FDTD.AddWaveGuidePort(2, start, stop, 'z',
+                               E_file="Coax_Er.csv", H_file="Coax_Hr.csv",
+                               kc=0.0, excite=0, excite_type=0)
+
+# --- Absorber 2: terminates the far (high-z) end, behind port 2 ---
 # normal_positive=False because the incoming wave travels in the +z direction
 # and the absorber faces it from the far (high-z) end.
 abs_z = Zz.item(idxAbs2)
@@ -156,14 +165,15 @@ abs_stop  = [ coax_D * 0.5 + coax_shield_thick,  coax_D * 0.5 + coax_shield_thic
 modal_abs_2 = FDTD.AddModalAbsorber(abs_start, abs_stop, 'z',
                                     E_file="Coax_Er.csv",
                                     H_file="Coax_Hr.csv",
+                                    mode_type='TEM',   # no cutoff -> scalar Zw
                                     normal_positive=False,
                                     Zw=238.26517157)
 
-### Define dump box...
-Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
-start = [SimBox[0], SimBox[2], SimBox[4]];
-stop  = [SimBox[1], SimBox[3], SimBox[5]];
-Et.AddBox(start, stop);
+### Field export -- disabled. Uncomment to dump E(t) over the whole box.
+# Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
+# start = [SimBox[0], SimBox[2], SimBox[4]]
+# stop  = [SimBox[1], SimBox[3], SimBox[5]]
+# Et.AddBox(start, stop)
 
 # ## Run the simulation
 if display_structure:
@@ -179,22 +189,45 @@ if not post_proc_only:
     FDTD.Run(Sim_Path, verbose=0, cleanup=False)
 
 # ## Post-processing
-# Only port 1 is available; measure reflection to assess absorber quality.
+# Port 1 gives the reflection (absorber quality), port 2 the through wave.
 f = np.linspace(max(1e9, f0 - fc), f0 + fc, 401)
 
-Zw  = np.array([238.26517157])   # waveguide impedance (same as Coax_W_WG_Ports reference)
+Zw  = np.array([238.26517157])   # modal impedance (same as Coax_W_WG_Ports)
 port1.CalcPort(Sim_Path, f, ref_impedance=Zw, ZL=50)
+port2.CalcPort(Sim_Path, f, ref_impedance=Zw, ZL=50)
 
-s11     = port1.uf_ref / port1.uf_inc
-s11_dB  = 20.0 * np.log10(np.abs(s11))
+s11 = port1.uf_ref / port1.uf_inc
+s21 = port2.uf_ref / port1.uf_inc
+s11_dB = 20.0 * np.log10(np.abs(s11)).ravel()
+s21_dB = 20.0 * np.log10(np.abs(s21)).ravel()
+
+print('\n===== Coax TEM, modal absorbers (scalar Zw, mode_type=TEM) =====')
+print('  f[GHz]    |S11| dB    |S21| dB')
+for fi in [1.5, 2.0, 2.5, 3.0, 3.5]:
+    if fi * 1e9 < f[0] or fi * 1e9 > f[-1]:
+        continue
+    j = np.abs(f - fi * 1e9).argmin()
+    print('   {:.2f}    {:8.2f}    {:8.2f}'.format(fi, s11_dB[j], s21_dB[j]))
+print('worst |S11| in band: {:.2f} dB'.format(np.max(s11_dB)))
+
+# Energy balance sanity check. In a lossless line |S11|^2 + |S21|^2 must be <= 1.
+# A value meaningfully above 1 means the port de-embedding is not separating
+# incident from reflected consistently, and the |S11| column above is then
+# reporting the de-embedding rather than the absorber. This is a property of
+# WaveguidePort.CalcPort, not of the termination.
+bal = np.abs(s11).ravel() ** 2 + np.abs(s21).ravel() ** 2
+print('energy balance |S11|^2+|S21|^2: min {:.3f}  max {:.3f}{}'.format(
+      bal.min(), bal.max(),
+      '   <-- ABOVE 1: |S11| is de-embed limited, not the absorber' if bal.max() > 1.02 else ''))
 
 figure()
-plot(f / 1e9, s11_dB, 'k-', linewidth=2, label='$S_{11}$ (reflection, modal absorber at far end)')
+plot(f / 1e9, s11_dB, 'k-', linewidth=2, label='$S_{11}$ (reflection)')
+plot(f / 1e9, s21_dB, 'b-', linewidth=2, label='$S_{21}$ (through)')
 grid()
 legend()
 ylabel('S-Parameter (dB)')
 xlabel('Frequency (GHz)')
-title('Coaxial line — modal absorber vs. WG port termination')
+title('Coaxial line (TEM) — modal absorbers at both ends')
 
 # ## Modal-absorber mode-match graphical debugging
 # Each modal absorber dumps two time-domain mode-match files into Sim_Path:
