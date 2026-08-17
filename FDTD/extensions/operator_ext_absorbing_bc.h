@@ -33,11 +33,24 @@
 #ifndef OPERATOR_EXT_ABSORBING_BC_H
 #define OPERATOR_EXT_ABSORBING_BC_H
 
+#include <vector>
+
 #include "FDTD/operator.h"
 #include "operator_extension.h"
 #include "tools/arraylib/array_ij.h"
 
 #include "CSPropAbsorbingBC.h"
+
+//! FIR length of the Modal Mur per-cell delay, in taps.
+/*!
+  Deliberately a compile-time predef and NOT a user parameter. Its only
+  effect is how faithfully the truncated filter reproduces exp(-j*beta*dz),
+  which is an internal accuracy/cost trade with no physical meaning to a
+  caller. Measured on the rectangular-waveguide testbed: 512 taps give
+  0.49% band error and max|H| = 1.011, and S11 is essentially flat against
+  tap count from 256 upward -- there is nothing here worth exposing.
+  */
+#define MODAL_MUR_NTAPS 512
 
 class Operator_Ext_Absorbing_BC : public Operator_Extension
 {
@@ -52,7 +65,8 @@ public:
 		UNDEFINED	= 0,
 		MUR_1ST 	= 1,	// Mur's BC, 1st order
 		MUR_1ST_SA 	= 2,	// Mur's BC, 1st order, with Super Absorption
-		MODAL		= 3		// Modal absorption
+		MODAL		= 3,	// Modal absorption (Huygens injection form)
+		MODAL_MUR	= 4		// Dispersive Modal Mur (one-way modal termination)
 	};
 
 	Operator_Ext_Absorbing_BC(Operator* op);
@@ -85,10 +99,17 @@ public:
 	//! Copy the sheet bounding box (drawing units) into the caller's arrays.
 	void GetSheetBoundingBox(double start[3], double stop[3], bool Efield = true) const;
 
+	//! True once the Modal Mur taps and mode template were built successfully.
+	bool IsModalMurReady() const { return m_MurReady; }
+
 protected:
 
 	Operator_Ext_Absorbing_BC(Operator* op, Operator_Ext_Absorbing_BC* op_ext);
 	void Initialize();
+
+	//! Build everything the Modal Mur engine extension needs: the mode
+	//! template at Yee edge positions, and the per-cell delay taps.
+	bool BuildModalMur();
 
 	unsigned int			m_numCells;		// Number of cells in each primitive
 
@@ -127,6 +148,39 @@ protected:
 	ABCtype			m_ABCtype;
 
 	double			m_phaseVelocity;
+
+	// ---- Dispersive Modal Mur (MODAL_MUR) --------------------------------
+	// Modal cutoff. May be zero or negative; negative means kc^2 < 0, which is
+	// how TEM / quasi-TEM lines are expressed. See CSPropAbsorbingBC.
+	double			m_CutOffFrequency;
+	bool			m_CutOffFrequencySet;
+
+	// Index of the plane the modal amplitude is READ from: one cell into the
+	// guide from the sheet. The sheet plane itself (m_sheetX0[m_ny]) is where
+	// the delayed amplitude is written.
+	unsigned int	m_MurReadPos;
+
+	// Spacing between the read plane and the sheet plane [m]. This is the dz
+	// the delay filter is designed for, so the mesh must be locally uniform
+	// here for the lattice dispersion relation to hold.
+	double			m_MurDz;
+
+	// Per-cell delay FIR, newest sample first.
+	std::vector<double>	m_MurTaps;
+
+	// Mode template sampled at the Yee EDGE positions of each transverse
+	// component, over the FULL sheet aperture, L2-normalised so that
+	// sum (mP^2 + mPP^2) * dA = 1. That normalisation is what makes the read
+	// integral and the deploy inverses of each other.
+	//
+	// Sampling at Yee edge positions (rather than at the node, as the mode
+	// match does) matters: the two transverse components live half a cell
+	// apart, and treating them as co-located is exactly the kind of half-cell
+	// error that produced an edge-asymmetric absorber before.
+	ArrayLib::ArrayIJ<double>	m_MurModeP;
+	ArrayLib::ArrayIJ<double>	m_MurModePP;
+
+	bool			m_MurReady;
 
 	// Coefficients, to be initialized on-demand.
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_K1_nyP;

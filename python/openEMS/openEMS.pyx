@@ -370,6 +370,49 @@ cdef class openEMS:
                                    Zw=Zw,
                                    priority=priority)
 
+    def AddModalMurAbsorber(self, start, stop, p_dir, E_file, fc,
+                            normal_positive=True, priority=0):
+        """ AddModalMurAbsorber(start, stop, p_dir, E_file, fc, normal_positive=True, priority=0)
+
+        Add a Dispersive Modal Mur absorbing sheet (one-way modal termination).
+
+        The sheet's modal component is overwritten each timestep with the
+        delayed modal amplitude one cell inside, a(sheet) = a(inside) *
+        exp(-j*beta*dz), with beta taken from the exact discrete lattice
+        dispersion relation. Needs no wave impedance and no H mode file.
+
+        Place the sheet DIRECTLY ON the face of the PEC block terminating the
+        guide. A gap between sheet and PEC becomes a sealed cavity: harmless to
+        the guide, but it stalls global energy convergence tests. openEMS does
+        not check that a PEC block is present -- that is up to the caller.
+
+        Parameters
+        ----------
+        start, stop : array-like, length 3
+            Bounding box corners.  ``start[p_dir]`` must equal ``stop[p_dir]``.
+        p_dir : str or int
+            Propagation direction ('x'/'y'/'z' or 0/1/2).
+        E_file : str
+            Path to the E-field mode CSV file.
+        fc : float
+            Modal cutoff frequency in Hz.  May be zero or negative; negative
+            means kc^2 < 0, which is how TEM/quasi-TEM lines are expressed.
+        normal_positive : bool
+            True when the guide lies at HIGHER index than the sheet (the sheet
+            terminates the low-coordinate end); False for the high end.
+        priority : int
+            CSXCAD primitive priority.
+
+        See Also
+        --------
+        openEMS.ports.ModalMurAbsorber
+        """
+        if self.__CSX is None:
+            raise Exception('AddModalMurAbsorber: CSX is not set!')
+        return ports.ModalMurAbsorber(self.__CSX, start, stop, p_dir, E_file, fc,
+                                      normal_positive=normal_positive,
+                                      priority=priority)
+
     def AddWaveGuidePort(self, port_nr, start, stop, p_dir, E_func = None, H_func = None, kc = 0.0, excite = 0, excite_type = 0, E_file = None, H_file = None, **kw):
         """ AddWaveGuidePort(self, port_nr, start, stop, p_dir, E_func = None, H_func = None, kc = 0.0, excite = 0, excite_type = 0, E_file = None, H_file = None, **kw)
 

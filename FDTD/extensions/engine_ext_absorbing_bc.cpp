@@ -72,6 +72,12 @@ Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_e
 	m_Hmm_prev = 0.0;
 	m_corr_gain = -1.0;   // computed lazily on first use (needs the PMM grids)
 
+	// One-way delay history. Starts at zero, which is the physically correct
+	// initial condition: nothing has left through the sheet yet.
+	m_MurHead = 0;
+	if (m_ABCtype == int(Operator_Ext_Absorbing_BC::MODAL_MUR))
+		m_MurHist.assign(m_Op_ABC->m_MurTaps.size(), 0.0);
+
 	m_start_TS = 0;
 
 	// Initialize shifted position for V
@@ -347,6 +353,16 @@ void Engine_Ext_Absorbing_BC::Apply2VoltagesImpl(EngType* eng, int threadID)
 	if (threadID >= m_NrThreads)
 		return;
 
+	// The one-way modal termination belongs exactly here: after the E update
+	// and before the H update, so the value written on the sheet is what the
+	// following H update sees -- the same ordering the Octave prototype uses.
+	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) == Operator_Ext_Absorbing_BC::MODAL_MUR)
+	{
+		if (threadID == 0)
+			ApplyModalMur(eng);
+		return;
+	}
+
 	// Mur-only step; modal absorber does not participate here.
 	if ((Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST
 	 && (Operator_Ext_Absorbing_BC::ABCtype)(m_ABCtype) != Operator_Ext_Absorbing_BC::MUR_1ST_SA)
@@ -374,6 +390,113 @@ void Engine_Ext_Absorbing_BC::Apply2VoltagesImpl(EngType* eng, int threadID)
 void Engine_Ext_Absorbing_BC::Apply2Voltages(int threadID)
 {
 	ENG_DISPATCH_ARGS(Apply2VoltagesImpl, threadID);
+}
+
+// =========================================================================
+//  DISPERSIVE MODAL MUR  --  one-way modal termination
+//
+//  Impose, do not inject. The injection form has to MEASURE the outgoing
+//  wave, which needs a direction test E = +-Zw*H, and Zw is singular at
+//  cutoff and reactive below it -- so that test cannot work there, which is
+//  what forced the caps, walls and guards the injection path carries.
+//
+//  A one-way condition needs no impedance at all. For a mode leaving through
+//  the sheet plane, the modal amplitude there is just the DELAYED amplitude
+//  one plane inside:
+//
+//      a_sheet(w) = a_inside(w) * exp(-j*beta(w)*dz)
+//
+//  so read the modal amplitude one cell in, run it through the delay filter,
+//  and write the result onto the sheet. Three steps, no H field anywhere.
+// =========================================================================
+template <typename EngType>
+void Engine_Ext_Absorbing_BC::ApplyModalMur(EngType* eng)
+{
+	if (!m_Op_ABC->IsModalMurReady())
+		return;
+
+	const Operator* op = m_Op_ABC->m_Op;
+	const unsigned int nTaps = (unsigned int)m_Op_ABC->m_MurTaps.size();
+	if (nTaps == 0)
+		return;
+
+	unsigned int pos[3] = {0,0,0};
+
+	// ---- 1. read the modal amplitude one cell inside ----------------------
+	//  a = integral( E . m ) dA, with E = V/dl on each edge. The template is
+	//  L2-normalised over the aperture, so 'a' is the field amplitude of the
+	//  mode and nothing else.
+	pos[m_ny] = m_Op_ABC->m_MurReadPos;
+	double aIn = 0.0;
+	for (unsigned int i = 0; i < m_numLines[0]; ++i)
+	{
+		pos[m_nyP] = m_posStart[m_nyP] + i;
+		for (unsigned int j = 0; j < m_numLines[1]; ++j)
+		{
+			pos[m_nyPP] = m_posStart[m_nyPP] + j;
+
+			double dA = op->GetNodeArea(m_ny, pos, false);
+
+			// Skip cells the mode does not live in (PEC): they contribute
+			// nothing to the projection and must not be written to later.
+			double mP = m_Op_ABC->m_MurModeP(i,j);
+			if (mP != 0.0)
+			{
+				double dl = op->GetEdgeLength(m_nyP, pos, false);
+				if (dl != 0.0)
+					aIn += (eng->EngType::GetVolt(m_nyP, pos) / dl) * mP * dA;
+			}
+
+			double mPP = m_Op_ABC->m_MurModePP(i,j);
+			if (mPP != 0.0)
+			{
+				double dl = op->GetEdgeLength(m_nyPP, pos, false);
+				if (dl != 0.0)
+					aIn += (eng->EngType::GetVolt(m_nyPP, pos) / dl) * mPP * dA;
+			}
+		}
+	}
+
+	// ---- 2. delay it by one cell ------------------------------------------
+	//  Newest sample first: m_MurHead walks backwards so that history entry k
+	//  is always the sample from k steps ago, without moving any data.
+	m_MurHead = (m_MurHead == 0) ? (nTaps - 1) : (m_MurHead - 1);
+	m_MurHist[m_MurHead] = aIn;
+
+	double aOut = 0.0;
+	unsigned int idx = m_MurHead;
+	const std::vector<double>& h = m_Op_ABC->m_MurTaps;
+	for (unsigned int k = 0; k < nTaps; ++k)
+	{
+		aOut += h[k] * m_MurHist[idx];
+		idx = (idx + 1 == nTaps) ? 0 : (idx + 1);
+	}
+
+	// ---- 3. write it onto the sheet plane ---------------------------------
+	//  A direct write, not a correction. The sheet is meant to sit on the face
+	//  of a PEC block, whose operator coefficients re-zero these edges on every
+	//  E update -- so the plane is a clean slate here and nothing accumulates.
+	//  Non-modal content on the plane stays zero, i.e. it still sees PEC, which
+	//  is exactly what an absorber for ONE mode should do with everything else.
+	pos[m_ny] = m_posStart[m_ny];
+	for (unsigned int i = 0; i < m_numLines[0]; ++i)
+	{
+		pos[m_nyP] = m_posStart[m_nyP] + i;
+		for (unsigned int j = 0; j < m_numLines[1]; ++j)
+		{
+			pos[m_nyPP] = m_posStart[m_nyPP] + j;
+
+			double mP = m_Op_ABC->m_MurModeP(i,j);
+			if (mP != 0.0)
+				eng->EngType::SetVolt(m_nyP, pos,
+				                      aOut * mP * op->GetEdgeLength(m_nyP, pos, false));
+
+			double mPP = m_Op_ABC->m_MurModePP(i,j);
+			if (mPP != 0.0)
+				eng->EngType::SetVolt(m_nyPP, pos,
+				                      aOut * mPP * op->GetEdgeLength(m_nyPP, pos, false));
+		}
+	}
 }
 
 template <typename EngType>

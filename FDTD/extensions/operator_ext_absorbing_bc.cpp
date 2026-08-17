@@ -17,10 +17,15 @@
 
 #include "operator_ext_absorbing_bc.h"
 #include "engine_ext_absorbing_bc.h"
+#include "modal_mur_taps.h"
 
 #include "tools/array_ops.h"
+#include "tools/global.h"
 
 #include "CSPrimBox.h"
+#include "CSModeFileParser.h"
+
+#include <cmath>
 
 using std::cerr;
 using std::endl;
@@ -59,6 +64,13 @@ void Operator_Ext_Absorbing_BC::Initialize()
 
 	m_phaseVelocity = 0.0;
 	m_Zw = 0.0;
+
+	m_CutOffFrequency = 0.0;
+	m_CutOffFrequencySet = false;
+	m_MurReadPos = 0;
+	m_MurDz = 0.0;
+	m_MurTaps.clear();
+	m_MurReady = false;
 }
 
 bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbingBC* abc_prop)
@@ -142,6 +154,8 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 	m_EModeFileName = abc_prop->GetEModeFileName();
 	m_HModeFileName = abc_prop->GetHModeFileName();
 	m_Zw = abc_prop->GetWaveImpedance();
+	m_CutOffFrequency = abc_prop->GetCutOffFrequency();
+	m_CutOffFrequencySet = abc_prop->IsCutOffFrequencySet();
 
 	// Now the H-Field PMM coordinates
 	// * Start by detecting the ePMM index
@@ -152,10 +166,14 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 		m_sheetX1_h[iy] = m_sheetX1[iy];
 	}
 
-	// Determine correct shift and notify user if it slides out of bounding box
+	// Determine correct shift and notify user if it slides out of bounding box.
+	// MODAL_MUR is exempt: it uses no H plane at all, and sitting ON the domain
+	// edge is its RECOMMENDED placement (the sheet is meant to be the face of
+	// the terminating PEC block), so the warning below would be backwards.
 	unsigned int hShift = (unsigned int)m_normalSignPositive;
 	// Shift one index back if this is catching negative direction propgating waves
-	if ((m_normalSignPositive && (m_sheetX0_h[m_ny] == 0)) || (!m_normalSignPositive && (m_sheetX0_h[m_ny] == (m_Op->GetNumberOfLines(m_ny) - 1))))
+	if ((m_ABCtype != ABCtype::MODAL_MUR)
+	 && ((m_normalSignPositive && (m_sheetX0_h[m_ny] == 0)) || (!m_normalSignPositive && (m_sheetX0_h[m_ny] == (m_Op->GetNumberOfLines(m_ny) - 1)))))
 	{
 		cerr 	<< "Operator_Ext_Absorbing_BC::SetInitParams(): Warning: Trying to set local absorber on bonding box edge. Results will be erroneous"
 				<< " ID: " << prim->GetID() << " @ Property: " << abc_prop->GetName() << endl;
@@ -225,6 +243,12 @@ bool Operator_Ext_Absorbing_BC::BuildExtension()
 	// Initialize number of lines to be used in the arrayIJ
 	m_numLines[0] = Ncells[m_nyP];
 	m_numLines[1] = Ncells[m_nyPP];
+
+	// The one-way form shares none of the Mur machinery below: no phase
+	// velocity, no K1/K2 coefficients, no wave impedance. Build its own state
+	// and return.
+	if (m_ABCtype == ABCtype::MODAL_MUR)
+		return BuildModalMur();
 
 	// Initialize containers. If there are more BCs in the future, this needs to be updated with the respective conditions.
 	m_K1_nyP.Init("K1_Coeff_nyP", m_numLines);
@@ -300,6 +324,160 @@ bool Operator_Ext_Absorbing_BC::BuildExtension()
 		arrI++;
 	}
 
+	return true;
+}
+
+bool Operator_Ext_Absorbing_BC::BuildModalMur()
+{
+	m_MurReady = false;
+
+	if (m_EModeFileName.empty())
+	{
+		cerr << "Operator_Ext_Absorbing_BC::BuildModalMur(): Error: MODAL_MUR needs an E mode file." << endl;
+		return false;
+	}
+	if (!m_CutOffFrequencySet)
+	{
+		cerr << "Operator_Ext_Absorbing_BC::BuildModalMur(): Error: MODAL_MUR needs a cutoff frequency"
+		        " (fc, may be negative for TEM/QTEM). Set it via AddModalMurAbsorber(..., fc=<Hz>)." << endl;
+		return false;
+	}
+
+	// ---- plane layout ------------------------------------------------------
+	// The sheet plane is where the delayed amplitude is WRITTEN; in the
+	// intended setup it is the face of a PEC block, so the E update re-zeroes
+	// it every step and the write is a clean slate rather than an accumulation.
+	// The READ plane is one cell into the guide.
+	//
+	// The shift follows the same convention the Mur path uses for its interior
+	// neighbour (m_pos_ny0_shift_V): normalSignPositive means the interior lies
+	// at HIGHER index. Direction is encoded entirely by which plane is read and
+	// which is written -- there is no sign in the filter to get wrong.
+	const unsigned int deployPos = m_sheetX0[m_ny];
+	const int readShift = m_normalSignPositive ? +1 : -1;
+	const long readPosL = (long)deployPos + readShift;
+
+	if ((readPosL < 0) || (readPosL >= (long)m_Op->GetNumberOfLines(m_ny, true)))
+	{
+		cerr << "Operator_Ext_Absorbing_BC::BuildModalMur(): Error: read plane falls outside the mesh."
+		        " The absorber sheet needs at least one cell of guide on its inner side." << endl;
+		return false;
+	}
+	m_MurReadPos = (unsigned int)readPosL;
+
+	m_MurDz = fabs(m_Op->GetDiscLine(m_ny, m_MurReadPos, false)
+	             - m_Op->GetDiscLine(m_ny, deployPos,    false)) * m_Op->GetGridDelta();
+	if (m_MurDz <= 0.0)
+	{
+		cerr << "Operator_Ext_Absorbing_BC::BuildModalMur(): Error: degenerate read/sheet plane spacing." << endl;
+		return false;
+	}
+
+	// ---- mode template at the Yee EDGE positions ---------------------------
+	CSModeFileParser modeFile;
+	if (!modeFile.ParseFile(m_EModeFileName) || !modeFile.HasModeData())
+	{
+		cerr << "Operator_Ext_Absorbing_BC::BuildModalMur(): Error: could not parse E mode file '"
+		     << m_EModeFileName << "'." << endl;
+		return false;
+	}
+
+	m_MurModeP.Init("modal_mur_mode_nyP", m_numLines);
+	m_MurModePP.Init("modal_mur_mode_nyPP", m_numLines);
+
+	// Mode-file coordinates are local to the sheet's physical start corner,
+	// the same anchor ProcessModeMatch and the mode-file excitation both use.
+	const double* origin = m_dSheetStart;
+
+	unsigned int pos[3] = {0,0,0};
+	pos[m_ny] = deployPos;
+
+	double norm = 0.0;
+	for (unsigned int i = 0; i < m_numLines[0]; ++i)
+	{
+		pos[m_nyP] = m_sheetX0[m_nyP] + i;
+		for (unsigned int j = 0; j < m_numLines[1]; ++j)
+		{
+			pos[m_nyPP] = m_sheetX0[m_nyPP] + j;
+
+			// The two transverse E components do NOT live at the same point:
+			// each sits at the centre of its own edge, half a cell apart. Sample
+			// each where it actually lives -- the dual line along its own
+			// direction, the primary line along the other.
+			double vP, vPP, dummy;
+
+			modeFile.LinInterp2(m_Op->GetDiscLine(m_nyP,  pos[m_nyP],  true)  - origin[m_nyP],
+			                    m_Op->GetDiscLine(m_nyPP, pos[m_nyPP], false) - origin[m_nyPP],
+			                    vP, dummy);
+
+			modeFile.LinInterp2(m_Op->GetDiscLine(m_nyP,  pos[m_nyP],  false) - origin[m_nyP],
+			                    m_Op->GetDiscLine(m_nyPP, pos[m_nyPP], true)  - origin[m_nyPP],
+			                    dummy, vPP);
+
+			if (std::isnan(vP)  || std::isinf(vP))  vP  = 0.0;
+			if (std::isnan(vPP) || std::isinf(vPP)) vPP = 0.0;
+
+			// Each component is half-shifted along ITS OWN direction, so it has
+			// one FEWER valid Yee edge there: over N primary lines there are only
+			// N-1 dual segments. Blanking that last line is not cosmetic -- the
+			// mode file happily interpolates a non-zero value at the clamped
+			// coordinate, which would both add a phantom row to the projection
+			// and deposit charge on an edge lying on the aperture boundary. The
+			// engine skips zero entries, so this removes them from both.
+			if (i + 1 == m_numLines[0]) vP  = 0.0;
+			if (j + 1 == m_numLines[1]) vPP = 0.0;
+
+			m_MurModeP(i,j)  = vP;
+			m_MurModePP(i,j) = vPP;
+
+			double dA = m_Op->GetNodeArea(m_ny, pos, false);
+			norm += (vP*vP + vPP*vPP) * dA;
+		}
+	}
+
+	if (norm <= 0.0)
+	{
+		cerr << "Operator_Ext_Absorbing_BC::BuildModalMur(): Error: mode template is identically zero over the sheet."
+		        " Check the mode file's coordinate frame against the sheet's start corner." << endl;
+		return false;
+	}
+
+	// L2-normalise so that sum (mP^2 + mPP^2) * dA = 1. This is what makes the
+	// read integral a = int(E . m)dA and the deploy E = a*m exact inverses.
+	norm = sqrt(norm);
+	for (unsigned int i = 0; i < m_numLines[0]; ++i)
+		for (unsigned int j = 0; j < m_numLines[1]; ++j)
+		{
+			m_MurModeP(i,j)  /= norm;
+			m_MurModePP(i,j) /= norm;
+		}
+
+	// ---- per-cell delay taps -----------------------------------------------
+	double maxAbsH = 0.0, acausalFrac = 0.0;
+	if (!ModalMur::DesignDelayTaps(m_CutOffFrequency, m_MurDz, m_Op->GetTimestep(),
+	                               MODAL_MUR_NTAPS, m_MurTaps, maxAbsH, acausalFrac))
+	{
+		cerr << "Operator_Ext_Absorbing_BC::BuildModalMur(): Error: delay tap design failed." << endl;
+		return false;
+	}
+
+	// Passivity is the property this whole scheme rests on: |exp(-j*beta*dz)|
+	// never exceeds 1, so the termination cannot pump energy no matter what
+	// sits behind it. Truncating the kernel can break that, and if it is broken
+	// the run grows without bound -- so say so now, not an hour into the solve.
+	if (maxAbsH > 1.05)
+		cerr << "Operator_Ext_Absorbing_BC::BuildModalMur(): Warning: realised max|H| = " << maxAbsH
+		     << " exceeds 1: the truncated delay filter is NOT passive and this absorber may grow."
+		     << " Check that fc and the local cell size are sane." << endl;
+
+	if (g_settings.GetVerboseLevel() > 0)
+		cerr << "Operator_Ext_Absorbing_BC: Modal Mur, ny=" << m_ny
+		     << " sheet=" << deployPos << " read=" << m_MurReadPos
+		     << " dz=" << m_MurDz << " m, fc=" << m_CutOffFrequency << " Hz, "
+		     << MODAL_MUR_NTAPS << " taps, max|H|=" << maxAbsH
+		     << ", acausal=" << acausalFrac << endl;
+
+	m_MurReady = true;
 	return true;
 }
 

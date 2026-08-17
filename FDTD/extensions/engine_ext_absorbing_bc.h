@@ -18,6 +18,8 @@
 #ifndef ENGINE_EXT_ABSORBING_BC_H
 #define ENGINE_EXT_ABSORBING_BC_H
 
+#include <vector>
+
 #include "engine_extension.h"
 #include "FDTD/engine.h"
 #include "FDTD/operator.h"
@@ -109,6 +111,15 @@ protected:
 	int			m_normalSign;	// +1 if normalSignPositive, -1 otherwise
 	double		m_Hmm_prev;		// H mode-match value from the previous half-timestep (for time averaging)
 	double		m_corr_gain;	// per-step correction gain 2*nu/(1+nu); computed lazily (<0 = not yet)
+
+	// ---- Dispersive Modal Mur (MODAL_MUR) --------------------------------
+	template <typename EngType>
+	void ApplyModalMur(EngType* eng);
+
+	// History of the modal amplitude read one cell inside, newest first, held
+	// as a ring so no data is shuffled per step. Sized to the tap count.
+	std::vector<double>	m_MurHist;
+	unsigned int		m_MurHead;		// index of the newest sample
 
 
 };

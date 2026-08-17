@@ -115,6 +115,13 @@ class Port(object):
     def CalcPort(self, sim_path, freq, ref_impedance=None, ref_plane_shift=None, signal_type='pulse'):
         self.ReadUIData(sim_path, freq, signal_type)
 
+        # Optional current colocation: the I probe lives on the dual mesh,
+        # half a cell from the U plane. A subclass may set self.i_coloc to
+        # translate the measured current onto the U plane (phase above a mode
+        # cutoff, evanescent amplitude below it). Without it the E/H mismatch
+        # leaks into the incident/reflected separation.
+        self.if_tot = self.if_tot * getattr(self, 'i_coloc', 1.0)
+
         if ref_impedance is not None:
             self.Z_ref = ref_impedance
         if self.Z_ref is None:
@@ -458,12 +465,43 @@ class WaveguidePort(Port):
         self.port_props.append(i_probe)
         
     def CalcPort(self, sim_path, freq, ref_impedance=None, ref_plane_shift=None, signal_type='pulse', ZL = -1):
+        freq = np.asarray(freq, dtype=float)
         k = 2.0*np.pi*freq/C0*self.ref_index
-        self.beta = np.sqrt(k**2 - self.kc**2)
+        # Complex propagation constant: below the mode cutoff the wave is
+        # evanescent. Using the decaying-wave branch beta = -1j*alpha keeps
+        # the analytic wave impedance ZL = k*Z0/beta finite (and purely
+        # reactive, +jX for a TE mode) below cutoff, so the S-parameters
+        # evaluate to numbers instead of NaN; |S11| -> ~1 there, as a
+        # cut-off guide reflects everything. A real sqrt would produce NaN
+        # below fc and a division by zero exactly at fc.
+        beta2 = np.asarray(k**2 - self.kc**2, dtype=complex)
+        beta = np.sqrt(beta2)
+        beta = np.where(beta2.real < 0.0, -1j*np.abs(beta), beta)
+        # floor the cutoff singularity (beta -> 0 exactly at f = fc)
+        floor = np.abs(k)*1e-9
+        beta = np.where(np.abs(beta) < floor, floor + 0j, beta)
+        self.beta = beta
         if ZL <= 0:
-            self.ZL = k * Z0 / self.beta    #analytic waveguide impedance
+            self.ZL = k * Z0 / self.beta    # analytic waveguide impedance (reactive below cutoff)
         else:
             self.ZL = ZL
+        # Colocate the dual-mesh current sample onto the U plane: the I probe
+        # sits half a cell upstream (along the propagation direction) of the
+        # voltage plane. Above cutoff this is a small phase; below cutoff it
+        # is the evanescent amplitude factor e^{-alpha*dz/2} -- without it the
+        # incident/reflected separation floors at the E/H mismatch level
+        # (measured: a flat, synthetic-looking |S11| plateau below cutoff).
+        # Offset sign settled empirically by the sharpest discriminator, the
+        # below-cutoff evanescent branch: with this sign the sub-cutoff |S11|
+        # falls monotonically toward the noise floor (matching the Octave
+        # coloc de-embed); with the opposite sign it flattens at the E/H
+        # mismatch plateau.
+        half_cell = 0.5 * self.measplane_shift * self.CSX.GetGrid().GetDeltaUnit()
+        self.i_coloc = np.exp(+1j * self.beta * self.direction * half_cell)
+        if (self.kc > 0) and (freq.min()*2.0*np.pi/C0*self.ref_index < 1.02*self.kc):
+            print('WaveguidePort.CalcPort: Warning: frequency range extends to/below the mode '
+                  'cutoff; S-parameters there use an evanescent (reactive) reference and are '
+                  'not propagating-wave quantities.')
         if ref_impedance is None:
             self.Z_ref = self.ZL
         super(WaveguidePort, self).CalcPort(sim_path, freq, ref_impedance, ref_plane_shift, signal_type)
@@ -556,13 +594,27 @@ class ModalAbsorber:
         False if the energy arrives from the positive direction.
     phase_velocity : float, optional
         Phase velocity of the mode (m/s).  Defaults to C0 (inside CSXCAD).
+    normal_zero : str or CSXCAD.CSProperties.NormalZeroType
+        Zero the field component(s) normal to the sheet: 'none' (default),
+        'E', 'H' or 'both'.  A NormalZeroType enum value is accepted as well.
+    fc : float
+        Analytic cutoff frequency of the mode in Hz.  fc > 0 enables the
+        wideband FIR absorber (beta = sqrt(k0^2 - kc^2) dispersion); fc < 0
+        is interpreted as fc^2 < 0 (TEM convention, reserved); fc = 0
+        (default) keeps the dispersion-less scalar absorber using Zw.
+    dc_bleed : bool
+        Enable the DC bleeder fail-safe (default False).  Relevant for
+        TEM/QTEM modes: their DC content cannot leave through the modal
+        correction and parks at the sheet; when a frozen field is detected
+        there the plane is bled gently (x0.999 per step).
     priority : int
         CSXCAD primitive priority.
     """
 
     def __init__(self, CSX, start, stop, prop_dir, E_file, H_file,
-                 normal_positive=True, phase_velocity=None, Zw=-1.0, priority=0):
-        from CSXCAD.CSProperties import ABCtype
+                 normal_positive=True, phase_velocity=None, Zw=-1.0,
+                 normal_zero='none', fc=0.0, dc_bleed=False, priority=0):
+        from CSXCAD.CSProperties import ABCtype, NormalZeroType
 
         self.CSX = CSX
         self.start = np.array(start, dtype=float)
@@ -572,6 +624,16 @@ class ModalAbsorber:
         self.H_file = H_file
         self.normal_positive = normal_positive
 
+        if isinstance(normal_zero, str):
+            nz_map = {'none': NormalZeroType.ZERO_NONE,
+                      'e'   : NormalZeroType.ZERO_E,
+                      'h'   : NormalZeroType.ZERO_H,
+                      'both': NormalZeroType.ZERO_BOTH}
+            if normal_zero.lower() not in nz_map:
+                raise ValueError("normal_zero must be 'none', 'E', 'H' or 'both' (got '{}')".format(normal_zero))
+            normal_zero = nz_map[normal_zero.lower()]
+        self.normal_zero = normal_zero
+
         prop_name = 'modal_absorber_{}'.format(id(self))
         kw = dict(
             NormalSignPositive   = normal_positive,
@@ -579,9 +641,87 @@ class ModalAbsorber:
             EModeFileName        = E_file,
             HModeFileName        = H_file,
             WaveImpedance        = Zw,
+            NormalZeroType       = normal_zero,
+            CutOffFrequency      = fc,
+            DCBleed              = dc_bleed,
         )
         if phase_velocity is not None:
             kw['PhaseVelocity'] = phase_velocity
+
+        self.abc_prop = CSX.AddAbsorbingBC(prop_name, **kw)
+        self.abc_prop.AddBox(start, stop, priority=priority)
+
+
+class ModalMurAbsorber:
+    """
+    Dispersive Modal Mur absorbing boundary condition (one-way modal termination).
+
+    Places a CSPropAbsorbingBC sheet of type MODAL_MUR at the given location.
+    The sheet's modal component is overwritten every timestep with the delayed
+    modal amplitude one cell inside,
+
+        a_sheet(w) = a_inside(w) * exp(-j*beta(w)*dz)
+
+    where beta comes from the exact discrete lattice dispersion relation. The
+    delay has |exp(-j*beta*dz)| <= 1 everywhere, so the termination is passive
+    by construction: it needs no wave impedance, no drain cap and no stability
+    guard, and evanescent content below cutoff is handled exactly (a real decay
+    per cell) instead of being misread by a direction test that cannot work
+    there.
+
+    Placement
+    ---------
+    Put the sheet **directly on the face of the PEC block** that terminates the
+    guide. Because the condition is an overwrite, whatever lies behind the sheet
+    is driven but can never drive back -- so a gap between the sheet and the PEC
+    becomes a sealed cavity that fills with energy it can never release. That
+    trapped energy does not affect the guide at all (measured: the guide's decay
+    is identical to 1e-13 dB whether the gap is 0 or 10 cells), but it does stall
+    any global energy-based convergence test. With the sheet on the PEC face
+    there is no such region and the problem cannot arise.
+
+    openEMS does **not** verify that a PEC block is actually there; that is the
+    caller's responsibility.
+
+    Parameters
+    ----------
+    CSX : ContinuousStructure
+    start, stop : array-like, length 3
+        Bounding box of the absorber sheet.  Must be flat along ``prop_dir``.
+    prop_dir : str or int
+        Propagation direction ('x', 'y', 'z', or 0/1/2).
+    E_file : str
+        Path to the CSV file for the E-field mode shape.  No H file is needed.
+    fc : float
+        Modal cutoff frequency in Hz.  May be zero or NEGATIVE: a negative value
+        means kc^2 = -(2*pi*fc/c0)^2, which is how TEM and quasi-TEM lines (coax,
+        CPW) are expressed without complex arithmetic in the tap generator.
+    normal_positive : bool
+        True when the guide lies at HIGHER index than the sheet, i.e. the sheet
+        terminates the low-coordinate end.  False for the high-coordinate end.
+    priority : int
+        CSXCAD primitive priority.
+    """
+
+    def __init__(self, CSX, start, stop, prop_dir, E_file, fc,
+                 normal_positive=True, priority=0):
+        from CSXCAD.CSProperties import ABCtype
+
+        self.CSX = CSX
+        self.start = np.array(start, dtype=float)
+        self.stop  = np.array(stop,  dtype=float)
+        self.prop_dir = CheckNyDir(prop_dir)
+        self.E_file = E_file
+        self.fc = fc
+        self.normal_positive = normal_positive
+
+        prop_name = 'modal_mur_absorber_{}'.format(id(self))
+        kw = dict(
+            NormalSignPositive    = normal_positive,
+            AbsorbingBoundaryType = ABCtype.MODAL_MUR,
+            EModeFileName         = E_file,
+            CutOffFrequency       = fc,
+        )
 
         self.abc_prop = CSX.AddAbsorbingBC(prop_name, **kw)
         self.abc_prop.AddBox(start, stop, priority=priority)
