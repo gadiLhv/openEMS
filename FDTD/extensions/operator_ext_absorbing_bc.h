@@ -209,6 +209,26 @@ protected:
 	ArrayLib::ArrayIJ<FDTD_FLOAT> 	m_K2_nyP;
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_K2_nyPP;
 
+	//! Build the modal DEPLOYMENT templates (MODAL only): the mode files
+	//! evaluated at the true Yee component positions over the FULL sheet
+	//! aperture. The mode-match (PMM) grids only MEASURE -- they exclude the
+	//! domain-boundary lines, which is fine for an integral but must never
+	//! define the actuation aperture: painting on the clipped grid misses the
+	//! wall-adjacent edges asymmetrically and injects spurious (m,1)-mode
+	//! content every step (observed as y=0 hot spots on rect TE10).
+	void BuildModalDeployTemplates();
+
+	// Deployment templates (jointly L2-normalized like the PMM templates).
+	// dE_nyP : E edge along nyP  at (dual_nyP,  prim_nyPP), size (P-1) x PP
+	// dE_nyPP: E edge along nyPP at (prim_nyP,  dual_nyPP), size P x (PP-1)
+	// dH_nyP : I edge along nyP  at (prim_nyP,  dual_nyPP), size P x (PP-1)
+	// dH_nyPP: I edge along nyPP at (dual_nyP,  prim_nyPP), size (P-1) x PP
+	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_dE_nyP;
+	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_dE_nyPP;
+	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_dH_nyP;
+	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_dH_nyPP;
+	bool							m_deployTemplatesValid;
+
 
 
 };

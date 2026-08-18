@@ -177,15 +177,22 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 
 		const Operator* op = m_Op_ABC->m_Op;
 
-		unsigned int numLinesE_P  = m_Eng_Interface->GetModeMatchE_NumLines(0);
-		unsigned int numLinesE_PP = m_Eng_Interface->GetModeMatchE_NumLines(1);
-		unsigned int numLinesH_P  = m_Eng_Interface->GetModeMatchH_NumLines(0);
-		unsigned int numLinesH_PP = m_Eng_Interface->GetModeMatchH_NumLines(1);
-
-		// Apply the corrections on EXACTLY the grid the mode-match measured:
-		// the PMM's snapped start indices (published via the interface). Snapping
-		// independently here disagrees by one cell (dual-mesh rounding / boundary
-		// clipping) and the removed "mode" no longer matches the measured one.
+		// ------------------------------------------------------------------
+		// DEPLOYMENT GRID. The corrections are painted on the operator's OWN
+		// full-aperture sheet grid with templates sampled at the true Yee
+		// component positions -- NOT on the mode-match (PMM) grids.
+		//
+		// The PMMs only MEASURE. Their grids deliberately drop the
+		// domain-boundary lines, which is correct for an integral and fatal
+		// for actuation: the node clipping is edge-asymmetric, so the
+		// wall-adjacent E edges on one side were never painted while the
+		// opposite side was. That asymmetry is a spurious source at the wall,
+		// re-injected every timestep -- visible as hot spots hugging the
+		// conductor at the sheet, and as a near-cutoff residue that stalls the
+		// energy decay.
+		//
+		// Only the NORMAL PMM indices are still read below, and only to
+		// calibrate the correction gain from the E/H plane separation.
 		unsigned int startE[3], startH[3];
 		for (int n = 0; n < 3; ++n)
 		{
@@ -216,55 +223,71 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 		}
 		a *= m_corr_gain;
 
-		// V correction at the E plane. The mode template m is L2-normalized over the
-		// sheet (sum m^2*dA = 1), so 'a' is the field-amplitude coefficient and the
-		// per-edge voltage correction is  V -= a * m * EdgeLength  (E = V/dl).
+		if (!m_Op_ABC->m_deployTemplatesValid)
+			return;
+
+		const unsigned int P  = m_numLines[0];
+		const unsigned int PP = m_numLines[1];
+
+		// V correction at the E plane. The templates are L2-normalized over the
+		// sheet (sum m^2*dA = 1), so 'a' is the field-amplitude coefficient and
+		// the per-edge voltage correction is  V -= a * m * EdgeLength (E = V/dl).
 		unsigned int pos_v[] = {0,0,0};
-		pos_v[m_ny] = startE[m_ny];
-		for (unsigned int i = 0; i < numLinesE_P; ++i)
+		pos_v[m_ny] = m_posStart[m_ny];
+		for (unsigned int i = 0; i < P; ++i)
 		{
-			pos_v[m_nyP] = startE[m_nyP] + i;
-			for (unsigned int j = 0; j < numLinesE_PP; ++j)
+			pos_v[m_nyP] = m_posStart[m_nyP] + i;
+			for (unsigned int j = 0; j < PP; ++j)
 			{
-				pos_v[m_nyPP] = startE[m_nyPP] + j;
-				double el_nyP  = op->GetEdgeLength(m_nyP,  pos_v, false);
-				double el_nyPP = op->GetEdgeLength(m_nyPP, pos_v, false);
-				double mE_nyP  = m_Eng_Interface->GetModeDistE(0, i, j);
-				double mE_nyPP = m_Eng_Interface->GetModeDistE(1, i, j);
-				// Skip conductor cells (zero mode value) so the modal correction
-				// never overwrites a PEC-owned edge; only the live mode region is
-				// corrected (mirrors the mode-file excitation's "amp!=0" guard).
-				if (mE_nyP != 0.0)
-					eng->EngType::SetVolt(m_nyP,  pos_v, eng->EngType::GetVolt(m_nyP,  pos_v) - a * mE_nyP * el_nyP);
-				if (mE_nyPP != 0.0)
-					eng->EngType::SetVolt(m_nyPP, pos_v, eng->EngType::GetVolt(m_nyPP, pos_v) - a * mE_nyPP * el_nyPP);
+				pos_v[m_nyPP] = m_posStart[m_nyPP] + j;
+				// An E edge along nyP exists for i < P-1; along nyPP for j < PP-1.
+				// Conductor cells and wall-normal components need no guard: true
+				// -position sampling of the mode file gives them exactly 0.
+				if (i < P - 1)
+				{
+					double mE = m_Op_ABC->m_dE_nyP(i, j);
+					if (mE != 0.0)
+						eng->EngType::SetVolt(m_nyP,  pos_v, eng->EngType::GetVolt(m_nyP,  pos_v) - a * mE * op->GetEdgeLength(m_nyP,  pos_v, false));
+				}
+				if (j < PP - 1)
+				{
+					double mE = m_Op_ABC->m_dE_nyPP(i, j);
+					if (mE != 0.0)
+						eng->EngType::SetVolt(m_nyPP, pos_v, eng->EngType::GetVolt(m_nyPP, pos_v) - a * mE * op->GetEdgeLength(m_nyPP, pos_v, false));
+				}
 			}
 		}
 
-		// I correction at the H plane. The selector above and this launcher sign
-		// are INDEPENDENT degrees of freedom: the selector decides which wave is
-		// measured, this sign decides which direction the canceling (E,H) pair
-		// radiates. Direction verified by a one-shot kick experiment (arrival-time
-		// analysis at neighboring probes): -normalSign launches OUTWARD through
-		// the absorber for both orientations, as required.
+		// I correction on the single dual plane this branch samples H on. The
+		// selector above and this launcher sign are INDEPENDENT degrees of
+		// freedom: the selector decides which wave is measured, this sign
+		// decides which direction the canceling (E,H) pair radiates. Direction
+		// verified by a one-shot kick experiment (arrival-time analysis at
+		// neighboring probes): -normalSign launches OUTWARD through the
+		// absorber for both orientations, as required.
 		double dH_factor = -m_normalSign * a / m_Zw;
 		unsigned int pos_i[] = {0,0,0};
-		pos_i[m_ny] = startH[m_ny];
-		for (unsigned int i = 0; i < numLinesH_P; ++i)
+		pos_i[m_ny] = m_Op_ABC->m_sheetX0_h[m_ny];	// operator's dual plane, not the PMM's
+		for (unsigned int i = 0; i < P; ++i)
 		{
-			pos_i[m_nyP] = startH[m_nyP] + i;
-			for (unsigned int j = 0; j < numLinesH_PP; ++j)
+			pos_i[m_nyP] = m_posStart[m_nyP] + i;
+			for (unsigned int j = 0; j < PP; ++j)
 			{
-				pos_i[m_nyPP] = startH[m_nyPP] + j;
-				double el_nyP_d  = op->GetEdgeLength(m_nyP,  pos_i, true);
-				double el_nyPP_d = op->GetEdgeLength(m_nyPP, pos_i, true);
-				double mH_nyP  = m_Eng_Interface->GetModeDistH(0, i, j);
-				double mH_nyPP = m_Eng_Interface->GetModeDistH(1, i, j);
-				// Skip conductor cells (zero mode value); see note on the V loop above.
-				if (mH_nyP != 0.0)
-					eng->EngType::SetCurr(m_nyP,  pos_i, eng->EngType::GetCurr(m_nyP,  pos_i) - dH_factor * mH_nyP * el_nyP_d);
-				if (mH_nyPP != 0.0)
-					eng->EngType::SetCurr(m_nyPP, pos_i, eng->EngType::GetCurr(m_nyPP, pos_i) - dH_factor * mH_nyPP * el_nyPP_d);
+				pos_i[m_nyPP] = m_posStart[m_nyPP] + j;
+				// I along nyP lives in the dual nyPP slot (j < PP-1); along
+				// nyPP in the dual nyP slot (i < P-1). Mirror of the E loop.
+				if (j < PP - 1)
+				{
+					double mH = m_Op_ABC->m_dH_nyP(i, j);
+					if (mH != 0.0)
+						eng->EngType::SetCurr(m_nyP,  pos_i, eng->EngType::GetCurr(m_nyP,  pos_i) - dH_factor * mH * op->GetEdgeLength(m_nyP,  pos_i, true));
+				}
+				if (i < P - 1)
+				{
+					double mH = m_Op_ABC->m_dH_nyPP(i, j);
+					if (mH != 0.0)
+						eng->EngType::SetCurr(m_nyPP, pos_i, eng->EngType::GetCurr(m_nyPP, pos_i) - dH_factor * mH * op->GetEdgeLength(m_nyPP, pos_i, true));
+				}
 			}
 		}
 		return;

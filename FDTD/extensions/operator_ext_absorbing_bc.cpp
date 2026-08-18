@@ -71,6 +71,7 @@ void Operator_Ext_Absorbing_BC::Initialize()
 	m_MurDz = 0.0;
 	m_MurTaps.clear();
 	m_MurReady = false;
+	m_deployTemplatesValid = false;
 }
 
 bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbingBC* abc_prop)
@@ -345,6 +346,9 @@ bool Operator_Ext_Absorbing_BC::BuildExtension()
 		arrI++;
 	}
 
+	if ((m_ABCtype == ABCtype::MODAL) && !m_EModeFileName.empty() && !m_HModeFileName.empty())
+		BuildModalDeployTemplates();
+
 	return true;
 }
 
@@ -557,6 +561,176 @@ bool Operator_Ext_Absorbing_BC::BuildModalMur()
 
 	m_MurReady = true;
 	return true;
+}
+
+void Operator_Ext_Absorbing_BC::BuildModalDeployTemplates()
+{
+	CSModeFileParser eFile(m_EModeFileName);
+	CSModeFileParser hFile(m_HModeFileName);
+	if (!eFile.IsFileParsed() || !hFile.IsFileParsed())
+	{
+		cerr << "Operator_Ext_Absorbing_BC::BuildModalDeployTemplates(): Warning: could not parse mode file(s) '"
+		     << m_EModeFileName << "' / '" << m_HModeFileName << "', modal deployment disabled." << endl;
+		return;
+	}
+
+	unsigned int P  = m_numLines[0];		// sheet line count along nyP
+	unsigned int PP = m_numLines[1];		// sheet line count along nyPP
+
+	unsigned int sz_EP [2] = {P - 1, PP    };
+	unsigned int sz_EPP[2] = {P    , PP - 1};
+	m_dE_nyP.Init ("deploy_E_nyP",  sz_EP );
+	m_dE_nyPP.Init("deploy_E_nyPP", sz_EPP);
+	m_dH_nyP.Init ("deploy_H_nyP",  sz_EPP);	// I along nyP: (prim, dual)
+	m_dH_nyPP.Init("deploy_H_nyPP", sz_EP );	// I along nyPP: (dual, prim)
+
+	// Mode-file local frame: anchored at the E sheet's physical start corner
+	// (same convention as the excitation and the mode-match PMMs).
+	double oP  = m_dSheetStart[m_nyP];
+	double oPP = m_dSheetStart[m_nyPP];
+
+	// SAMPLING CONVENTION. Two defensible choices, and they are not
+	// interchangeable:
+	//
+	//  node (default) -- sample both components at the primal node, exactly
+	//      what ProcessModeMatch does. The measurement is
+	//      (node-interpolated E) . (node-sampled template), so a deployment
+	//      built the same way is the ADJOINT of the measurement: subtracting
+	//      'a' times it is a true projection, and what is removed is exactly
+	//      what was measured.
+	//
+	//  Yee (OPENEMS_ABC_DEPLOY_YEE=1) -- sample each component at its own
+	//      edge centre, which is where V/dl physically lives. More accurate in
+	//      isolation, but it no longer matches the measurement basis, so the
+	//      subtraction stops being a projection and leaves a residue that
+	//      grows with how fast the mode varies per cell. On the coax (five
+	//      lines across the centre wire, 1/r mode) that residue cost 7 dB of
+	//      through-transmission; on a well-resolved rect TE10 it is harmless.
+	//
+	// Fix the basis mismatch properly and Yee sampling becomes the better
+	// choice; until then, match the measurement.
+	static const bool deployYee = (getenv("OPENEMS_ABC_DEPLOY_YEE") != NULL);
+
+	double vP, vPP;
+	for (unsigned int i = 0; i < P; ++i)
+	{
+		double xp = m_Op->GetDiscLine(m_nyP, m_sheetX0[m_nyP] + i, false) - oP;	// primal
+		double xd = (i < P - 1) ? m_Op->GetDiscLine(m_nyP, m_sheetX0[m_nyP] + i, true) - oP : xp;	// dual
+		if (!deployYee) xd = xp;
+		for (unsigned int j = 0; j < PP; ++j)
+		{
+			double yp = m_Op->GetDiscLine(m_nyPP, m_sheetX0[m_nyPP] + j, false) - oPP;
+			double yd = (j < PP - 1) ? m_Op->GetDiscLine(m_nyPP, m_sheetX0[m_nyPP] + j, true) - oPP : yp;
+			if (!deployYee) yd = yp;
+
+			// E edge along nyP at (dual_nyP, prim_nyPP)
+			if (i < P - 1)
+			{
+				eFile.LinInterp2(xd, yp, vP, vPP);
+				m_dE_nyP(i, j) = vP;
+			}
+			// E edge along nyPP at (prim_nyP, dual_nyPP)
+			if (j < PP - 1)
+			{
+				eFile.LinInterp2(xp, yd, vP, vPP);
+				m_dE_nyPP(i, j) = vPP;
+			}
+			// I edge along nyP at (prim_nyP, dual_nyPP)
+			if (j < PP - 1)
+			{
+				hFile.LinInterp2(xp, yd, vP, vPP);
+				m_dH_nyP(i, j) = vP;
+			}
+			// I edge along nyPP at (dual_nyP, prim_nyPP)
+			if (i < P - 1)
+			{
+				hFile.LinInterp2(xd, yp, vP, vPP);
+				m_dH_nyPP(i, j) = vPP;
+			}
+		}
+	}
+
+	// Joint L2 normalization per field (same convention as ProcessModeMatch:
+	// sum of both squared components times the node area, over the sheet).
+	// Sampled at the primal/dual nodes of the full aperture; the residual
+	// scale difference vs. the PMM's boundary-clipped norm is a small gain
+	// factor absorbed by the correction-gain calibration.
+	unsigned int pos[3] = {0, 0, 0};
+	pos[m_ny] = m_sheetX0[m_ny];
+	double normE = 0.0, normH = 0.0;
+	for (unsigned int i = 0; i < P; ++i)
+	{
+		pos[m_nyP] = m_sheetX0[m_nyP] + i;
+		double xp = m_Op->GetDiscLine(m_nyP, pos[m_nyP], false) - oP;
+		double xd = (i < P - 1) ? m_Op->GetDiscLine(m_nyP, pos[m_nyP], true) - oP : 0.0;
+		for (unsigned int j = 0; j < PP; ++j)
+		{
+			pos[m_nyPP] = m_sheetX0[m_nyPP] + j;
+			double yp = m_Op->GetDiscLine(m_nyPP, pos[m_nyPP], false) - oPP;
+			double yd = (j < PP - 1) ? m_Op->GetDiscLine(m_nyPP, pos[m_nyPP], true) - oPP : 0.0;
+
+			eFile.LinInterp2(xp, yp, vP, vPP);
+			normE += (vP*vP + vPP*vPP) * m_Op->GetNodeArea(m_ny, pos, false);
+			if ((i < P - 1) && (j < PP - 1))
+			{
+				hFile.LinInterp2(xd, yd, vP, vPP);
+				normH += (vP*vP + vPP*vPP) * m_Op->GetNodeArea(m_ny, pos, true);
+			}
+		}
+	}
+	normE = sqrt(normE);
+	normH = sqrt(normH);
+	if ((normE == 0.0) || (normH == 0.0))
+	{
+		cerr << "Operator_Ext_Absorbing_BC::BuildModalDeployTemplates(): Warning: zero mode norm, modal deployment disabled." << endl;
+		return;
+	}
+	for (unsigned int i = 0; i < P; ++i)
+		for (unsigned int j = 0; j < PP; ++j)
+		{
+			if (i < P - 1)  { m_dE_nyP(i, j)  /= normE;  m_dH_nyPP(i, j) /= normH; }
+			if (j < PP - 1) { m_dE_nyPP(i, j) /= normE;  m_dH_nyP(i, j)  /= normH; }
+		}
+
+	// CONDUCTOR MASK, applied after the normalization so the basis keeps the
+	// same scale as the PMM's.
+	//
+	// The commit this came from assumed conductor cells sample to zero. That
+	// holds for an analytic template like the rect TE10 sin(), and fails for a
+	// numerically computed mode file: Coax_Er.csv carries mean |F| = 2.06
+	// inside the PEC centre wire (vs 8.01 in the dielectric). Painting a
+	// correction onto a PEC-owned edge is an injected source that the
+	// intervening current update sees, every single step.
+	//
+	// GetVV == 0 is the test: a PEC edge has an identically zero voltage
+	// update coefficient. Asked on the sheet plane itself, which for the MODAL
+	// path is an ordinary interior plane.
+	unsigned int posM[3] = {0, 0, 0};
+	posM[m_ny] = m_sheetX0[m_ny];
+	unsigned int nMasked = 0;
+	for (unsigned int i = 0; i < P; ++i)
+	{
+		posM[m_nyP] = m_sheetX0[m_nyP] + i;
+		for (unsigned int j = 0; j < PP; ++j)
+		{
+			posM[m_nyPP] = m_sheetX0[m_nyPP] + j;
+			if ((i < P - 1) && (m_Op->GetVV(m_nyP, posM) == 0.0) && (m_dE_nyP(i, j) != 0.0))
+			{
+				m_dE_nyP(i, j) = 0.0;
+				++nMasked;
+			}
+			if ((j < PP - 1) && (m_Op->GetVV(m_nyPP, posM) == 0.0) && (m_dE_nyPP(i, j) != 0.0))
+			{
+				m_dE_nyPP(i, j) = 0.0;
+				++nMasked;
+			}
+		}
+	}
+	if ((nMasked > 0) && (g_settings.GetVerboseLevel() > 0))
+		cerr << "Operator_Ext_Absorbing_BC::BuildModalDeployTemplates(): masked "
+		     << nMasked << " conductor-owned E edges out of the deployment template." << endl;
+
+	m_deployTemplatesValid = true;
 }
 
 Engine_Extension* Operator_Ext_Absorbing_BC::CreateEngineExtention()
