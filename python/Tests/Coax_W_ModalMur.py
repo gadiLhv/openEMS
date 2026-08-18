@@ -27,7 +27,21 @@
  MODE = 'SCALAR' The scalar Zw splitter. It measures direction from E = +-Zw*H
                  and therefore needs a live E field at its own plane, so it
                  CANNOT sit on a PEC face. The z faces are MUR and the sheets
-                 sit one cell inside.
+                 sit SCALAR_INSET cells inside. That inset is not cosmetic: at
+                 one cell the sheet and the MUR stencil overlap and the run
+                 DIVERGES (energy -> inf at ~7.5k steps). Two cells is already
+                 stable; four is the default, for margin and because it
+                 measures best.
+
+ WHICH ONE TO USE ON A COAX: SCALAR, by 12-19 dB. Measured here, worst
+ |Gamma| in band: scalar -32.1 dB, Modal Mur -13.7 dB. That is the expected
+ answer and it is worth saying why. A coax TEM mode has no cutoff, so its wave
+ impedance is a real constant and the direction test E = +-Zw*H -- the thing
+ that fails for a waveguide near cutoff -- works perfectly. Modal Mur buys
+ dispersion this line does not have, and pays for it: nu = v*dt/dz = 0.026 here
+ means 38 timesteps per cell, so the delay filter needs 2048 taps to stay
+ passive and its residual error is what sets the -14 dB floor. Use Modal Mur
+ where there IS a cutoff.
 
  MEASUREMENT
  -----------
@@ -57,7 +71,7 @@ from openEMS.physical_constants import *
 from openEMS import utilities
 
 # ## Which termination to test
-MODE = 'MUR'          # 'MUR' (Modal Mur on PEC faces) or 'SCALAR' (Zw splitter)
+MODE = 'SCALAR'       # 'SCALAR' (Zw splitter, best on a coax) or 'MUR' (Modal Mur on PEC)
 
 Sim_Path = os.path.join(tempfile.gettempdir(), 'Test_Coax_ModalMur_' + MODE)
 if not os.path.exists(Sim_Path):
@@ -152,9 +166,12 @@ mesh.SmoothMeshLines('all', mesh_res, 1.25)
 Zz = np.asarray(mesh.GetLines('z'))
 nz = len(Zz)
 
-# Sheet planes. MUR: on the PEC faces. SCALAR: one cell in, since it needs E.
-idxAbs1 = 0 if MODE == 'MUR' else 1
-idxAbs2 = (nz - 1) if MODE == 'MUR' else (nz - 2)
+# Sheet planes. MUR: on the PEC faces. SCALAR: inset, since it needs a live E
+# at its own plane and must not overlap the MUR stencil (see header -- one cell
+# diverges, two is stable, four measured best).
+SCALAR_INSET = 4
+idxAbs1 = 0 if MODE == 'MUR' else SCALAR_INSET
+idxAbs2 = (nz - 1) if MODE == 'MUR' else (nz - 1 - SCALAR_INSET)
 idxPort1 = idxAbs1 + 8
 idxPort2 = idxAbs2 - 8
 
