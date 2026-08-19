@@ -98,7 +98,34 @@ from openEMS.physical_constants import *
 from openEMS import utilities
 
 # ## Which termination to test
-MODE = 'SCALAR'       # 'SCALAR' (Zw splitter + Mur face) or 'MUR' (Modal Mur on PEC)
+MODE = 'MUR'          # 'MUR' (Modal Mur on PEC) or 'SCALAR' (Zw splitter + Mur face)
+
+# ## Watching it with your own eyes
+#
+# VIZ trades a little accuracy for a WATCHABLE animation, and it is not a
+# cosmetic switch -- with the analysis settings the picture is useless. The
+# analysis pulse is 269 mm long against an 80 mm line, i.e. 3.4x the whole
+# structure, so the entire coax lights up and dies down together and an
+# incident wave cannot be told from a reflected one by eye.
+#
+# VIZ shortens the pulse and doubles the line to 160 mm, so the pulse is a
+# compact blob that runs down the line, reaches the sheet on the PEC end face,
+# and either disappears into it or comes back as a second blob. If it comes
+# back you can SEE it, and that is the entire point.
+#
+# Two details that are not free choices:
+#
+#  - The short pulse is made by RAISING f0 with fc, to 6 +- 4 GHz. Widening fc
+#    alone (2.5 +- 6 GHz) puts enormous content at DC, and DC trapped between
+#    two PEC end faces never leaves: the Modal Mur delay has |D| = 1 at DC, so
+#    it does not remove it either. Measured: the run stalls at -36.6 dB and sits
+#    there for 150k timesteps. Same trap as the rectangular guide.
+#
+#  - The mesh is deliberately NOT refined to match the shorter pulse (see
+#    f_mesh below); that would cost 14x the cells for a picture.
+#
+# VIZ numbers are indicative only. For the validated S-parameters set VIZ=False.
+VIZ = True
 
 Sim_Path = os.path.join(tempfile.gettempdir(), 'Test_Coax_ModalMur_' + MODE)
 if not os.path.exists(Sim_Path):
@@ -113,7 +140,7 @@ display_structure = False
 coax_D = 2.0                    # inner diameter of the shield
 coax_shield_thick = 0.15
 coax_wire_D = 0.5
-coax_L = 80.0                   # long enough to hold ports and the fit ladder
+coax_L = 160.0 if VIZ else 80.0  # long enough to hold ports and the fit ladder
 teflon_epsR = 2.5
 Airbox_Add = 1.0                # transverse only -- NONE in z, that is the point
 unit = 1e-3
@@ -134,10 +161,18 @@ v_ph = C0 / N_EFF
 
 r_out = coax_D * 0.5 + coax_shield_thick        # 1.15 mm, matches Coax_Er.csv extent
 
-f0, fc_exc = 2.5e9, 1.0e9
+f0, fc_exc = (6.0e9, 4.0e9) if VIZ else (2.5e9, 1.0e9)
+# Mesh resolution is pinned to the ANALYSIS band on purpose. Deriving it from
+# the excitation, as this script used to, would refine the mesh 2.4x in every
+# direction under VIZ -- 14x the cells to make a picture.
+f_mesh = 3.5e9
 
 # ## FDTD setup
-FDTD = openEMS(NrTS=300000, EndCriteria=1e-5, OverSampling=4)
+# VIZ: cap the run at ~5 one-way transits -- long enough to watch the pulse
+# arrive and to see whether anything comes back, without waiting for a full
+# energy decay. OverSampling=1 keeps the frame count sane (4 would be ~1300).
+FDTD = openEMS(NrTS=(45000 if VIZ else 300000), EndCriteria=1e-5,
+               OverSampling=(1 if VIZ else 4))
 FDTD.SetGaussExcite(f0, fc_exc)
 if MODE == 'MUR':
     # PEC z faces: the Modal Mur sheets terminate them directly.
@@ -151,7 +186,7 @@ FDTD.SetCSX(CSX)
 mesh = CSX.GetGrid()
 mesh.SetDeltaUnit(unit)
 
-mesh_res = ((C0 / (f0 + fc_exc)) / unit) / 100.0
+mesh_res = ((C0 / f_mesh) / unit) / 100.0
 
 SimBox = np.array([-(r_out + Airbox_Add), (r_out + Airbox_Add),
                    -(r_out + Airbox_Add), (r_out + Airbox_Add),
@@ -243,9 +278,17 @@ for n, idx in enumerate(fit_idx):
     fit_files.append(fn)
 z_fit_m = (Zz[fit_idx] - Zz.item(int(idxFit0))) * unit
 
-### Field export -- disabled. Uncomment to dump E(t) over the whole box.
-# Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
-# Et.AddBox([SimBox[0], SimBox[2], SimBox[4]], [SimBox[1], SimBox[3], SimBox[5]])
+### Field export -------------------------------------------------------------
+#  A y = 0 CUT through the coax axis, not the whole box. The full volume is
+#  ~2.9 MB per frame and openEMS writes hundreds of frames; the axial cut is
+#  ~60 kB and is the view you actually want -- it shows the wave running down
+#  the line and what happens when it reaches the sheet on the PEC end face.
+#
+#  Open Sim_Path/Et_*.vtr as a time series in ParaView.
+DUMP_FIELDS = VIZ
+if DUMP_FIELDS:
+    Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
+    Et.AddBox([SimBox[0], 0.0, SimBox[4]], [SimBox[1], 0.0, SimBox[5]])
 
 if display_structure:
     CSX_file = os.path.join(Sim_Path, 'coax_modal_mur.xml')
@@ -257,7 +300,7 @@ if not post_proc_only:
     FDTD.Run(Sim_Path, verbose=3, cleanup=False)
 
 # ## Post-processing
-f = np.linspace(1.2e9, 3.8e9, 261)
+f = np.linspace(2.0e9, 10.0e9, 261) if VIZ else np.linspace(1.2e9, 3.8e9, 261)
 
 
 def modal_split(z_off_m, Uf_row, gam):
@@ -309,11 +352,21 @@ s21_dB = 20 * np.log10(np.abs(s21))
 print('\n===== Coax TEM, {} termination, no open ends ====='.format(MODE))
 print('  ideal effective index sqrt(eps_r) = {:.4f}'.format(np.sqrt(teflon_epsR)))
 print('  f[GHz]   MODAL-FIT |Gam|   n_eff   resid    port|S11|   |S21| dB')
-for fi in [1.5, 2.0, 2.5, 3.0, 3.5]:
+for fi in ([2.5, 4.0, 6.0, 8.0, 9.5] if VIZ else [1.5, 2.0, 2.5, 3.0, 3.5]):
     j = np.abs(f - fi * 1e9).argmin()
     print('   {:.2f}       {:9.2f}     {:.4f}  {:.4f}    {:8.2f}   {:8.2f}'.format(
           fi, Gam_dB[j], n_eff[j], res[j], s11_dB[j], s21_dB[j]))
-print('worst MODAL-FIT |Gamma| in band: {:.2f} dB   <-- the absorber'.format(np.max(Gam_dB)))
+# Print WHERE the worst point is, not just its value. A residual threshold is
+# not enough to police this: under VIZ the fit degrades over the top ~0.3 GHz
+# of the band and reads -0.1 dB, but the very worst point has a residual of
+# 0.002 -- it is fitting something coherent, just not the mode. Naming the
+# frequency lets the reader see at a glance that it is a band edge rather than
+# a reflection the absorber is failing to swallow.
+jw = np.argmax(Gam_dB)
+print('worst MODAL-FIT |Gamma|: {:.2f} dB at {:.2f} GHz (resid {:.4f})   <-- the absorber'.format(
+      Gam_dB[jw], f[jw] / 1e9, res[jw]))
+core = (f > f[0] + 0.1 * (f[-1] - f[0])) & (f < f[-1] - 0.1 * (f[-1] - f[0]))
+print('   ... excluding the outer 10% of the band: {:.2f} dB'.format(np.max(Gam_dB[core])))
 print('worst port |S11|        in band: {:.2f} dB   <-- de-embed limited'.format(np.max(s11_dB)))
 bal = np.abs(s11) ** 2 + np.abs(s21) ** 2
 print('energy balance |S11|^2+|S21|^2: min {:.3f}  max {:.3f}{}'.format(
