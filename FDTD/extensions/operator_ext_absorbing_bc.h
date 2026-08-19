@@ -73,83 +73,6 @@
   */
 #define MODAL_MUR_MAX_ABS_H 1.02
 
-//! On-the-fly modal correction (OTFC): re-learn the modal template from the
-//! simulated field instead of trusting the mode file.
-/*!
-  WHY. The absorber can only act on what it can project onto, so the modal
-  PURITY of the field at the sheet is a hard floor on the termination. Measured
-  on the PTFE coax testbed (python/Tests/Coax_ModePurity_Diag.py):
-
-      purity = (int E.m dA)^2 / (int E.E dA) = 0.947015
-
-  at 1, 2, 3, 4, 6, 8, 12, 20, 32 and 48 cells from the source -- identical to
-  six decimals, so it is NOT evanescent higher-order content that dies away, it
-  is a static mismatch between the analytic mode file and the mode this mesh
-  actually supports. 74.6% of the residual hugs the staircased centre wire and
-  it carries a clean m=4 azimuthal signature: a circle on a Cartesian grid.
-  sqrt(1-purity) = 0.2302 = -12.76 dB, against a measured Modal Mur floor of
-  -13.65 dB on the same structure. The floor IS the mode file.
-
-  A template taken from the field itself scores purity 1.000000 at every plane
-  (residual -67 dB, the float32 noise floor of the dump) -- about 56 dB of
-  headroom. Hence: sense, replace, renormalise, freeze.
-
-  Ported from the Octave prototype WG_Modal_Absorption_3D_Coax_ProperYee.m
-  (lines 366-395), with the departures documented at the call site.
-
-  WHERE IT SAMPLES IS THE WHOLE GAME. Wired to sample at each absorber's own
-  read plane, this made the coax termination ACTIVE -- energy climbed back to
-  its peak -- even though every local indicator looked perfect: template norm
-  1.000000, projection growing 0.28492 -> 0.28904, successive candidates
-  differing by 4e-7, purity 0.9717 -> 1.000000. The indicators lie because the
-  measurement was circular: the sheet writes aOut*m and one cell later that
-  write is read back and adopted as the new m. Note also that purity is
-  self-referential once the template IS the field's own shape, so purity -> 1
-  proves the code ran and nothing else. See MODAL_OTFC_SENSE_OFFSET.
-
-  ENABLED PER SHEET by the caller, via CSPropAbsorbingBC::SetOTFC, i.e.
-  AddModalAbsorber(..., otfc=True) from Python. Off by default: it needs a
-  single-plane excitation to locate the source, and it changes the basis the
-  absorber acts on, which is not a thing to do behind a caller's back. The
-  tuning constants below are compile-time, in the same spirit as
-  MODAL_MUR_NTAPS -- they are internal accuracy/cost trades, not choices a
-  caller should have to reason about.
-  */
-
-//! Sensing plane, in cells past the EXCITATION plane (ksns = ksrc + this).
-/*!
-  The sense plane is a property of the problem, not of a sheet, and it belongs
-  next to the source. Both absorbers share it, exactly as the prototype's single
-  ksns serves kA1 and kA2.
-
-  Sampling at the absorber's own read plane instead -- which is what a
-  self-contained sheet would naturally do, and what this first tried -- closes a
-  loop: the sheet writes aOut*m, one cell later that write is read back and
-  adopted as the new m. That is a fixed-point iteration on the absorber's own
-  output, not a measurement of the guide, and it drove the coax termination
-  active. Next to the source the field is the freshly launched wave, and it
-  knows nothing about any absorber.
-
-  Keep this small. 1 or 2 cells is the useful range: far enough that the raw
-  injected profile has become a real propagating field, near enough that it is
-  still a clean one-way wave with no accumulated reflection.
-  */
-#define MODAL_OTFC_SENSE_OFFSET 1
-
-//! Maximum number of template updates per sheet (Octave maxCtr, never reset).
-#define MODAL_OTFC_MAX_UPDATES 5
-
-//! Amplitude gate: only learn when |a_sense| >= this * the largest |a_sense|
-//! seen so far. This is the division guard -- a_sense is the divisor of the
-//! update, and dividing by a value far below the running maximum is how the
-//! prototype could detonate on pre-arrival numerical dust.
-#define MODAL_OTFC_GATE_FRAC 0.005
-
-//! Shape gate: relative change between successive candidate templates below
-//! which the shape is called converged. Dust fluctuates; the real mode does
-//! not (measured constant to six decimals along the whole line).
-#define MODAL_OTFC_SHAPE_TOL 1e-3
-
 class Operator_Ext_Absorbing_BC : public Operator_Extension
 {
 	friend class Engine_Ext_Absorbing_BC;
@@ -305,29 +228,6 @@ protected:
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_dH_nyP;
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_dH_nyPP;
 	bool							m_deployTemplatesValid;
-
-	// ---- on-the-fly modal correction -------------------------------------
-	//
-	// Scratch for the OTFC candidate template, allocated once at build time
-	// alongside the templates it shadows. It exists so the PREVIOUS candidate
-	// survives long enough to be compared against the current one -- that
-	// comparison is the shape-convergence gate, and it is what distinguishes
-	// the real mode from pre-arrival numerical dust.
-	//
-	// Allocated here, in the operator, and never re-Init()ed: ArrayIJ::Init()
-	// frees and re-mallocs without zeroing, which is not something to do while
-	// worker threads are parked on a barrier holding pointers into it.
-	ArrayLib::ArrayIJ<double>	m_otfcCandP;
-	ArrayLib::ArrayIJ<double>	m_otfcCandPP;
-	bool						m_otfcScratchValid;
-
-	//! Caller's opt-in for the on-the-fly modal correction (CSPropAbsorbingBC::SetOTFC).
-	bool						m_OTFC;
-
-	//! Allocate the OTFC scratch to match a template pair of the given size.
-	void AllocOTFCScratch(unsigned int P, unsigned int PP);
-
-
 
 };
 

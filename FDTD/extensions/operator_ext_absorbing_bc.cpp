@@ -72,8 +72,6 @@ void Operator_Ext_Absorbing_BC::Initialize()
 	m_MurTaps.clear();
 	m_MurReady = false;
 	m_deployTemplatesValid = false;
-	m_otfcScratchValid = false;
-	m_OTFC = false;
 }
 
 bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbingBC* abc_prop)
@@ -157,7 +155,6 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 	m_EModeFileName = abc_prop->GetEModeFileName();
 	m_HModeFileName = abc_prop->GetHModeFileName();
 	m_Zw = abc_prop->GetWaveImpedance();
-	m_OTFC = abc_prop->GetOTFC();
 	m_CutOffFrequency = abc_prop->GetCutOffFrequency();
 	m_CutOffFrequencySet = abc_prop->IsCutOffFrequencySet();
 
@@ -355,23 +352,6 @@ bool Operator_Ext_Absorbing_BC::BuildExtension()
 	return true;
 }
 
-void Operator_Ext_Absorbing_BC::AllocOTFCScratch(unsigned int P, unsigned int PP)
-{
-	// One P x PP pair covers every template layout in this class: the Modal Mur
-	// pair is full P x PP (with the trailing line blanked in place), and the
-	// deploy pair is (P-1) x PP / P x (PP-1), both of which fit.
-	unsigned int sz[2] = {P, PP};
-	m_otfcCandP.Init ("otfc_cand_nyP",  sz);
-	m_otfcCandPP.Init("otfc_cand_nyPP", sz);
-	for (unsigned int i = 0; i < P; ++i)
-		for (unsigned int j = 0; j < PP; ++j)
-		{
-			m_otfcCandP(i, j)  = 0.0;
-			m_otfcCandPP(i, j) = 0.0;
-		}
-	m_otfcScratchValid = true;
-}
-
 bool Operator_Ext_Absorbing_BC::BuildModalMur()
 {
 	m_MurReady = false;
@@ -429,7 +409,6 @@ bool Operator_Ext_Absorbing_BC::BuildModalMur()
 
 	m_MurModeP.Init("modal_mur_mode_nyP", m_numLines);
 	m_MurModePP.Init("modal_mur_mode_nyPP", m_numLines);
-	AllocOTFCScratch(m_numLines[0], m_numLines[1]);
 
 	// Mode-file coordinates are local to the sheet's physical start corner,
 	// the same anchor ProcessModeMatch and the mode-file excitation both use.
@@ -604,7 +583,6 @@ void Operator_Ext_Absorbing_BC::BuildModalDeployTemplates()
 	m_dE_nyPP.Init("deploy_E_nyPP", sz_EPP);
 	m_dH_nyP.Init ("deploy_H_nyP",  sz_EPP);	// I along nyP: (prim, dual)
 	m_dH_nyPP.Init("deploy_H_nyPP", sz_EP );	// I along nyPP: (dual, prim)
-	AllocOTFCScratch(P, PP);
 
 	// Mode-file local frame: anchored at the E sheet's physical start corner
 	// (same convention as the excitation and the mode-match PMMs).

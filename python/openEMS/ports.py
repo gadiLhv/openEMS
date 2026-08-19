@@ -629,23 +629,6 @@ class ModalAbsorber:
         Wave speed of the guide's medium (m/s), default C0.  Dielectric-filled
         lines should set it -- C0/sqrt(eps_r) -- since for TE/TM it sets both
         the lattice dispersion and the cutoff conversion kc = 2*pi*fc/v.
-    otfc : bool
-        On-the-fly modal correction. Re-learn this sheet's mode template from
-        the field sensed next to the SOURCE, instead of trusting the mode file.
-
-        The mode file is an idealisation and the mode a staircased mesh
-        actually supports is not it. Measured on a PTFE coax: the analytic
-        template captures 94.7% of the field energy, so 23% of the amplitude is
-        invisible to the absorber whatever it does -- a -12.8 dB floor, against
-        a measured -13.65 dB termination. Enabling this was worth about 14 dB
-        there.
-
-        It is a no-op where the mode file is already exact: an analytic
-        rectangular TE10 reports template purity 1 before any update and is left
-        unchanged. Requires a single-plane excitation so the source can be
-        located; if none is found the correction stays idle and says so.
-
-        Default False, because it changes the basis the absorber acts on.
     priority : int
         CSXCAD primitive priority.
     """
@@ -654,8 +637,7 @@ class ModalAbsorber:
 
     def __init__(self, CSX, start, stop, prop_dir, E_file, mode_type='TEM',
                  H_file=None, Zw=-1.0, fc=None,
-                 normal_positive=True, phase_velocity=None, otfc=False,
-                 priority=0):
+                 normal_positive=True, phase_velocity=None, priority=0):
         from CSXCAD.CSProperties import ABCtype, ModeType
 
         mt = str(mode_type).upper()
@@ -692,7 +674,6 @@ class ModalAbsorber:
             ModeType              = [ModeType.MODE_TEM,
                                      ModeType.MODE_TE,
                                      ModeType.MODE_TM][self._MODES[mt]],
-            OTFC                  = bool(otfc),
         )
         if H_file is not None:
             kw['HModeFileName'] = H_file

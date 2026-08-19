@@ -58,16 +58,6 @@ public:
 	unsigned int GetCurrCount() const {return Curr_Count;}
 	unsigned int GetCurrCount(int ny) const {return Curr_Count_Dir[ny];}
 
-	//! Index along \a ny of the plane carrying the voltage excitation.
-	/*!
-	  Returns false unless every excited edge shares one index along \a ny,
-	  which is the case for a port launching a mode on a single plane. Callers
-	  that need to know where the source is -- the modal absorber's on-the-fly
-	  template correction, which must sample the freshly launched wave rather
-	  than its own output -- can then place themselves relative to it.
-	  */
-	bool GetExcitationPlane(int ny, unsigned int& pos) const;
-
 protected:
 	Operator_Ext_Excitation(Operator* op, Operator_Ext_Excitation* op_ext);
 
