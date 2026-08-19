@@ -82,14 +82,6 @@ display_structure = False
 # stress case that deliberately slams a decade below cutoff.
 DC_HEAVY = False
 
-# On-the-fly modal correction. Expected to be a NO-OP here, and that is the
-# point: this guide's analytic sin(pi*x/a) template already IS the discrete
-# mode, so the correction reports purity 1 before any update and changes
-# nothing (measured: -42.05 dB with, -42.4 dB without -- inside the test's own
-# run-to-run spread). It is the control that says the correction only moves
-# what it should. Contrast the coax, where the same switch is worth 14 dB.
-OTFC = True
-
 # waveguide setup (Octave testbed dimensions, drawing units = mm)
 fc_wg = 1.2e9  # TE10 cutoff frequency
 unit = 1e-3
@@ -170,7 +162,6 @@ modal_mur_1 = FDTD.AddModalAbsorber([0.0, 0.0, abs_z], [wg_a, wg_b, abs_z], 'z',
                                     E_file=E_mode_file,
                                     mode_type='TE',      # -> dispersive Modal Mur
                                     fc=fc_abs,
-                                    otfc=OTFC,
                                     normal_positive=True)
 
 # --- Port 1: waveguide port with excitation (mode files, TE -> excite_type 0) ---
@@ -196,7 +187,6 @@ modal_mur_2 = FDTD.AddModalAbsorber([0.0, 0.0, abs_z], [wg_a, wg_b, abs_z], 'z',
                                     E_file=E_mode_file,
                                     mode_type='TE',      # -> dispersive Modal Mur
                                     fc=fc_abs,
-                                    otfc=OTFC,
                                     normal_positive=False)
 
 # ## Modal-fit probe ladder ---------------------------------------------------
