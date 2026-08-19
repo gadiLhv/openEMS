@@ -100,6 +100,24 @@ from openEMS import utilities
 # ## Which termination to test
 MODE = 'MUR'  # 'MUR' (Modal Mur on PEC) or 'SCALAR' (Zw splitter + Mur face)
 
+# On-the-fly modal correction. The mode file is an idealisation; the mode this
+# staircased mesh actually supports is not it, and the gap is a hard floor on
+# the absorber (measured here: template purity 0.947, i.e. 23% of the field
+# amplitude invisible, against a -13.65 dB termination). With OTFC the sheets
+# re-learn their template from the field sensed next to the source.
+#
+# Measured on this test, worst |Gamma| excluding the outer 10% of the band:
+#   False -> -15.79 dB      True -> -30.09 dB
+#
+# Caveat: with OTFC on, the run does NOT converge -- a DC component builds up
+# and the energy criterion never trips, so it runs to NrTS. The in-band
+# S-parameters are unaffected; the energy balance and S21 are not, because the
+# record never settles.
+#
+# NOTE: only the MODE='MUR' path acts on this today. The scalar splitter still
+# uses its mode file regardless.
+OTFC = True
+
 # ## Field export
 #
 # Dumps the ENTIRE simulation box, for inspection in ParaView. About 2.9 MB per
@@ -229,9 +247,9 @@ def sheet(idx, normal_positive):
     if MODE == 'MUR':
         # TEM = the kc -> 0 limit of TM. fc = 0 makes the tap generator collapse
         # to the pure per-cell delay; phase_velocity carries the dielectric.
-        kw.update(mode_type='TM', fc=0.0, phase_velocity=v_ph)
+        kw.update(mode_type='TM', fc=0.0, phase_velocity=v_ph, otfc=OTFC)
     else:
-        kw.update(mode_type='TEM', H_file="Coax_Hr.csv", Zw=Zw_TEM)
+        kw.update(mode_type='TEM', H_file="Coax_Hr.csv", Zw=Zw_TEM, otfc=OTFC)
     return FDTD.AddModalAbsorber(box_lo + [z], box_hi + [z], 'z', **kw)
 
 

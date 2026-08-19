@@ -73,6 +73,7 @@ void Operator_Ext_Absorbing_BC::Initialize()
 	m_MurReady = false;
 	m_deployTemplatesValid = false;
 	m_otfcScratchValid = false;
+	m_OTFC = false;
 }
 
 bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbingBC* abc_prop)
@@ -156,6 +157,7 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 	m_EModeFileName = abc_prop->GetEModeFileName();
 	m_HModeFileName = abc_prop->GetHModeFileName();
 	m_Zw = abc_prop->GetWaveImpedance();
+	m_OTFC = abc_prop->GetOTFC();
 	m_CutOffFrequency = abc_prop->GetCutOffFrequency();
 	m_CutOffFrequencySet = abc_prop->IsCutOffFrequencySet();
 

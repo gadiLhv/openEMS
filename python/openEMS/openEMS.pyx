@@ -328,8 +328,9 @@ cdef class openEMS:
         
     def AddModalAbsorber(self, start, stop, p_dir, E_file, mode_type='TEM',
                          H_file=None, Zw=-1.0, fc=None,
-                         normal_positive=True, phase_velocity=None, priority=0):
-        """ AddModalAbsorber(start, stop, p_dir, E_file, mode_type='TEM', H_file=None, Zw=-1.0, fc=None, normal_positive=True, phase_velocity=None, priority=0)
+                         normal_positive=True, phase_velocity=None,
+                         otfc=False, priority=0):
+        """ AddModalAbsorber(start, stop, p_dir, E_file, mode_type='TEM', H_file=None, Zw=-1.0, fc=None, normal_positive=True, phase_velocity=None, otfc=False, priority=0)
 
         Add a modal absorbing boundary condition sheet for a single guided mode.
 
@@ -385,6 +386,7 @@ cdef class openEMS:
                                    fc=fc,
                                    normal_positive=normal_positive,
                                    phase_velocity=phase_velocity,
+                                   otfc=otfc,
                                    priority=priority)
 
     def AddWaveGuidePort(self, port_nr, start, stop, p_dir, E_func = None, H_func = None, kc = 0.0, excite = 0, excite_type = 0, E_file = None, H_file = None, **kw):

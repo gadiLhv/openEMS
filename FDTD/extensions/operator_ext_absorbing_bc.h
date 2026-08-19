@@ -106,8 +106,15 @@
   write is read back and adopted as the new m. Note also that purity is
   self-referential once the template IS the field's own shape, so purity -> 1
   proves the code ran and nothing else. See MODAL_OTFC_SENSE_OFFSET.
+
+  ENABLED PER SHEET by the caller, via CSPropAbsorbingBC::SetOTFC, i.e.
+  AddModalAbsorber(..., otfc=True) from Python. Off by default: it needs a
+  single-plane excitation to locate the source, and it changes the basis the
+  absorber acts on, which is not a thing to do behind a caller's back. The
+  tuning constants below are compile-time, in the same spirit as
+  MODAL_MUR_NTAPS -- they are internal accuracy/cost trades, not choices a
+  caller should have to reason about.
   */
-#define MODAL_OTFC_ENABLE 1
 
 //! Sensing plane, in cells past the EXCITATION plane (ksns = ksrc + this).
 /*!
@@ -313,6 +320,9 @@ protected:
 	ArrayLib::ArrayIJ<double>	m_otfcCandP;
 	ArrayLib::ArrayIJ<double>	m_otfcCandPP;
 	bool						m_otfcScratchValid;
+
+	//! Caller's opt-in for the on-the-fly modal correction (CSPropAbsorbingBC::SetOTFC).
+	bool						m_OTFC;
 
 	//! Allocate the OTFC scratch to match a template pair of the given size.
 	void AllocOTFCScratch(unsigned int P, unsigned int PP);

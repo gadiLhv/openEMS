@@ -31,10 +31,10 @@ post_proc_only = False
 display_structure = False
 
 # substrate setup
-coax_D             = 2
-coax_shield_thick  = 0.15
-coax_wire_D        = 0.5
-coax_L             = 25
+coax_D = 2
+coax_shield_thick = 0.15
+coax_wire_D = 0.5
+coax_L = 25
 
 teflon_epsR = 2.5
 
@@ -76,7 +76,7 @@ mesh.AddLine('z', SimBox[4:6])
 # center wire
 line = CSX.AddMetal('Wire_Inner')
 start = [0.0, 0.0, 0.0]
-stop  = [0.0, 0.0, coax_L]
+stop = [0.0, 0.0, coax_L]
 line.AddCylinder(priority=10, start=start, stop=stop, radius=coax_wire_D * 0.5)
 mesh.AddLine('x', np.linspace(start[0] - coax_wire_D * 0.5, stop[0] + coax_wire_D * 0.5, 6).tolist())
 mesh.AddLine('y', np.linspace(start[1] - coax_wire_D * 0.5, stop[1] + coax_wire_D * 0.5, 6).tolist())
@@ -85,35 +85,35 @@ mesh.AddLine('z', [start[2], stop[2]])
 # outer shield
 shield = CSX.AddMetal('Shield_Outer')
 start = [0.0, 0.0, 0.0]
-stop  = [0.0, 0.0, coax_L]
+stop = [0.0, 0.0, coax_L]
 shield.AddCylindricalShell(priority=10, start=start, stop=stop,
                             radius=(coax_D + coax_shield_thick) * 0.5,
                             shell_width=coax_shield_thick)
-rad    = (coax_D + coax_shield_thick) * 0.5
+rad = (coax_D + coax_shield_thick) * 0.5
 hthick = coax_shield_thick * 0.5
 mesh.AddLine('x',
-             np.linspace(start[0] - (rad + hthick), start[0] - (rad - hthick), 4).tolist() +
-             np.linspace(stop[0]  + (rad - hthick), stop[0]  + (rad + hthick), 4).tolist())
+             np.linspace(start[0] - (rad + hthick), start[0] - (rad - hthick), 4).tolist() + 
+             np.linspace(stop[0] + (rad - hthick), stop[0] + (rad + hthick), 4).tolist())
 mesh.AddLine('y',
-             np.linspace(start[1] - (rad + hthick), start[1] - (rad - hthick), 4).tolist() +
-             np.linspace(stop[1]  + (rad - hthick), stop[1]  + (rad + hthick), 4).tolist())
+             np.linspace(start[1] - (rad + hthick), start[1] - (rad - hthick), 4).tolist() + 
+             np.linspace(stop[1] + (rad - hthick), stop[1] + (rad + hthick), 4).tolist())
 mesh.AddLine('z', [start[2], stop[2]])
 
 # teflon fill
 teflon = CSX.AddMaterial('PTFE', epsilon=teflon_epsR)
 start = [0.0, 0.0, 0.0]
-stop  = [0.0, 0.0, coax_L]
+stop = [0.0, 0.0, coax_L]
 teflon.AddCylindricalShell(priority=8, start=start, stop=stop,
                             radius=(coax_wire_D + coax_D) * 0.25,
                             shell_width=(coax_D - coax_wire_D) * 0.5)
-rad    = (coax_wire_D + coax_D) * 0.25
+rad = (coax_wire_D + coax_D) * 0.25
 hthick = (coax_D - coax_wire_D) * 0.25
 mesh.AddLine('x',
-             np.linspace(start[0] - (rad + hthick), start[0] - (rad - hthick), 12).tolist() +
-             np.linspace(stop[0]  + (rad - hthick), stop[0]  + (rad + hthick), 12).tolist())
+             np.linspace(start[0] - (rad + hthick), start[0] - (rad - hthick), 12).tolist() + 
+             np.linspace(stop[0] + (rad - hthick), stop[0] + (rad + hthick), 12).tolist())
 mesh.AddLine('y',
-             np.linspace(start[1] - (rad + hthick), start[1] - (rad - hthick), 12).tolist() +
-             np.linspace(stop[1]  + (rad - hthick), stop[1]  + (rad + hthick), 12).tolist())
+             np.linspace(start[1] - (rad + hthick), start[1] - (rad - hthick), 12).tolist() + 
+             np.linspace(stop[1] + (rad - hthick), stop[1] + (rad + hthick), 12).tolist())
 mesh.AddLine('z', [start[2], stop[2]])
 
 # dense mesh near ports
@@ -126,32 +126,31 @@ mesh.SmoothMeshLines('all', mesh_res, 1.25)
 Zz = mesh.GetLines('z')
 idxPort1 = (np.where(Zz == 0.0)[0] + 15).item(0)
 idxPort2 = (np.where(Zz == coax_L)[0] - 3).item(0)
-idxAbs1  = idxPort1 - 10   # one cell outside the second port plane → absorber location
-idxAbs2  = idxPort2 + 1   # one cell outside the second port plane → absorber location
+idxAbs1 = idxPort1 - 10  # one cell outside the second port plane → absorber location
+idxAbs2 = idxPort2 + 1  # one cell outside the second port plane → absorber location
 
 # --- Port 1: waveguide port with excitation (same as Coax_W_WG_Ports.py) ---
 start = [-coax_D * 0.5 - coax_shield_thick, -coax_D * 0.5 - coax_shield_thick, Zz.item(idxPort1 + 0)]
-stop  = [ coax_D * 0.5 + coax_shield_thick,  coax_D * 0.5 + coax_shield_thick, Zz.item(idxPort1 + 1)]
+stop = [ coax_D * 0.5 + coax_shield_thick, coax_D * 0.5 + coax_shield_thick, Zz.item(idxPort1 + 1)]
 port1 = FDTD.AddWaveGuidePort(1, start, stop, 'z',
                                E_file="Coax_Er.csv", H_file="Coax_Hr.csv",
                                kc=0.0, excite=1, excite_type=0)
 
 abs_z = Zz.item(idxAbs1)
 abs_start = [-coax_D * 0.5 - coax_shield_thick, -coax_D * 0.5 - coax_shield_thick, abs_z]
-abs_stop  = [ coax_D * 0.5 + coax_shield_thick,  coax_D * 0.5 + coax_shield_thick, abs_z]
+abs_stop = [ coax_D * 0.5 + coax_shield_thick, coax_D * 0.5 + coax_shield_thick, abs_z]
 modal_abs_1 = FDTD.AddModalAbsorber(abs_start, abs_stop, 'z',
                                     E_file="Coax_Er.csv",
                                     H_file="Coax_Hr.csv",
-                                    mode_type='TEM',   # no cutoff -> scalar Zw
+                                    mode_type='TEM',  # no cutoff -> scalar Zw
                                     normal_positive=True,
                                     Zw=238.26517157)
-
 
 # --- Port 2: passive waveguide port, for the S21 measurement ---
 # Reversed z ordering so the port faces the incoming +z wave, exactly as in
 # RectWG_W_ModalMur.py. It sits one cell inside absorber 2.
 start = [-coax_D * 0.5 - coax_shield_thick, -coax_D * 0.5 - coax_shield_thick, Zz.item(idxPort2 - 0)]
-stop  = [ coax_D * 0.5 + coax_shield_thick,  coax_D * 0.5 + coax_shield_thick, Zz.item(idxPort2 - 1)]
+stop = [ coax_D * 0.5 + coax_shield_thick, coax_D * 0.5 + coax_shield_thick, Zz.item(idxPort2 - 1)]
 port2 = FDTD.AddWaveGuidePort(2, start, stop, 'z',
                                E_file="Coax_Er.csv", H_file="Coax_Hr.csv",
                                kc=0.0, excite=0, excite_type=0)
@@ -161,19 +160,19 @@ port2 = FDTD.AddWaveGuidePort(2, start, stop, 'z',
 # and the absorber faces it from the far (high-z) end.
 abs_z = Zz.item(idxAbs2)
 abs_start = [-coax_D * 0.5 - coax_shield_thick, -coax_D * 0.5 - coax_shield_thick, abs_z]
-abs_stop  = [ coax_D * 0.5 + coax_shield_thick,  coax_D * 0.5 + coax_shield_thick, abs_z]
+abs_stop = [ coax_D * 0.5 + coax_shield_thick, coax_D * 0.5 + coax_shield_thick, abs_z]
 modal_abs_2 = FDTD.AddModalAbsorber(abs_start, abs_stop, 'z',
                                     E_file="Coax_Er.csv",
                                     H_file="Coax_Hr.csv",
-                                    mode_type='TEM',   # no cutoff -> scalar Zw
+                                    mode_type='TEM',  # no cutoff -> scalar Zw
                                     normal_positive=False,
                                     Zw=238.26517157)
 
-### Field export -- disabled. Uncomment to dump E(t) over the whole box.
-# Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
-# start = [SimBox[0], SimBox[2], SimBox[4]]
-# stop  = [SimBox[1], SimBox[3], SimBox[5]]
-# Et.AddBox(start, stop)
+# Field export -- disabled. Uncomment to dump E(t) over the whole box.
+Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
+start = [SimBox[0], SimBox[2], SimBox[4]]
+stop = [SimBox[1], SimBox[3], SimBox[5]]
+Et.AddBox(start, stop)
 
 # ## Run the simulation
 if display_structure:
@@ -192,7 +191,7 @@ if not post_proc_only:
 # Port 1 gives the reflection (absorber quality), port 2 the through wave.
 f = np.linspace(max(1e9, f0 - fc), f0 + fc, 401)
 
-Zw  = np.array([238.26517157])   # modal impedance (same as Coax_W_WG_Ports)
+Zw = np.array([238.26517157])  # modal impedance (same as Coax_W_WG_Ports)
 port1.CalcPort(Sim_Path, f, ref_impedance=Zw, ZL=50)
 port2.CalcPort(Sim_Path, f, ref_impedance=Zw, ZL=50)
 
@@ -242,7 +241,8 @@ title('Coaxial line (TEM) — modal absorbers at both ends')
 # Wave impedance used when each absorber was created (see AddModalAbsorber above).
 # Map absorber index -> Zw if they ever differ; here both share the same value.
 Zw_abs_default = 238.26517157
-Zw_abs = {}   # e.g. {0: 238.26517157} to override per absorber
+Zw_abs = {}  # e.g. {0: 238.26517157} to override per absorber
+
 
 def _read_modematch_td(fname):
     """Return (t, value) from a ProcessModeMatch time-domain dump (data column 1)."""
@@ -250,6 +250,7 @@ def _read_modematch_td(fname):
     if data.size == 0:
         return None, None
     return data[:, 0], data[:, 1]
+
 
 _idx_re = re.compile(r'modal_absorber_(\d+)_E$')
 e_files = sorted(glob.glob(os.path.join(Sim_Path, 'modal_absorber_*_E')),
@@ -260,7 +261,7 @@ if not e_files:
           "(run the simulation first).".format(Sim_Path))
 
 for e_file in e_files:
-    idx    = int(_idx_re.search(e_file).group(1))
+    idx = int(_idx_re.search(e_file).group(1))
     h_file = os.path.join(Sim_Path, 'modal_absorber_{}_H'.format(idx))
     if not os.path.exists(h_file):
         print("Absorber {}: missing H file {}, skipping.".format(idx, h_file))
@@ -276,19 +277,19 @@ for e_file in e_files:
     # so E and H can be combined sample-by-sample.
     H_on_E = np.interp(tE, tH, H)
 
-    Zw_i    = Zw_abs.get(idx, Zw_abs_default)
-    a_plus  = E + Zw_i * H_on_E
+    Zw_i = Zw_abs.get(idx, Zw_abs_default)
+    a_plus = E + Zw_i * H_on_E
     a_minus = E - Zw_i * H_on_E
 
     figure()
     subplot(2, 1, 1)
-    plot(tE / 1e-9, E,            'b-',  label='E  (voltage mode match)')
+    plot(tE / 1e-9, E, 'b-', label='E  (voltage mode match)')
     plot(tE / 1e-9, Zw_i * H_on_E, 'r--', label=r'$Z_w\,H$  (current mode match)')
     grid(); legend(); ylabel('amplitude')
     title('Modal absorber #{}  —  mode-match constituents ($Z_w$ = {:.3f} $\\Omega$)'.format(idx, Zw_i))
 
     subplot(2, 1, 2)
-    plot(tE / 1e-9, a_plus,  'k-', linewidth=2, label=r'$a_+ = E + Z_w H$')
+    plot(tE / 1e-9, a_plus, 'k-', linewidth=2, label=r'$a_+ = E + Z_w H$')
     plot(tE / 1e-9, a_minus, 'g-', linewidth=2, label=r'$a_- = E - Z_w H$')
     grid(); legend(); ylabel('amplitude'); xlabel('time (ns)')
 
