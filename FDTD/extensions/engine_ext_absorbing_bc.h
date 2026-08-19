@@ -121,6 +121,36 @@ protected:
 	std::vector<double>	m_MurHist;
 	unsigned int		m_MurHead;		// index of the newest sample
 
+	// ---- on-the-fly modal correction (OTFC) ------------------------------
+	//! Sense the field on a plane and overwrite a template pair with its shape.
+	/*!
+	  \param modeP, modePP  template pair to overwrite, in place
+	  \param readPos        index along m_ny of the sensing plane
+	  \return true if a template update actually happened
+
+	  Straight replacement plus joint renormalisation, as in the Octave
+	  prototype -- its `exm = exm - (exm - Ex/Esns)` phrasing is an algebraic
+	  no-op detour, so this assigns directly. Conductor edges are re-masked
+	  afterwards: the prototype inherits that for free because its Ex/Ey arrays
+	  are PEC-masked in place, whereas here raw voltages come straight out of
+	  the engine.
+
+	  Runs on thread 0 only, inside an extension hook, where every other worker
+	  is parked on the iterate barrier and no field update is in flight.
+	  */
+	template <typename EngType, typename T>
+	bool RelearnModalTemplate(EngType* eng,
+	                          ArrayLib::ArrayIJ<T>& modeP,
+	                          ArrayLib::ArrayIJ<T>& modePP,
+	                          unsigned int readPos);
+
+	unsigned int	m_otfcCount;		// updates applied so far (Octave Ectr)
+	double			m_otfcSnsMax;		// largest |a_sense| seen, the gate scale
+	bool			m_otfcFrozen;		// true once the template is final
+	bool			m_otfcHavePrev;		// a previous candidate exists to compare
+	double			m_otfcSrcPeak;		// peak of the excitation waveform (Octave maxEsrc)
+	unsigned int	m_otfcStartTS;		// no learning before this timestep
+
 
 };
 

@@ -32,6 +32,7 @@
 #include "engine_ext_absorbing_bc.h"
 #include "operator_ext_absorbing_bc.h"
 #include "FDTD/engine.h"
+#include "FDTD/excitation.h"
 #include "FDTD/engine_sse.h"
 #include "FDTD/engine_interface_fdtd.h"
 #include "tools/array_ops.h"
@@ -79,6 +80,56 @@ Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_e
 		m_MurHist.assign(m_Op_ABC->m_MurTaps.size(), 0.0);
 
 	m_start_TS = 0;
+
+	// On-the-fly modal correction: nothing learned, nothing seen, not frozen.
+	m_otfcCount = 0;
+	m_otfcSnsMax = 0.0;
+	m_otfcFrozen = false;
+	m_otfcHavePrev = false;
+
+	// AMPLITUDE GATE REFERENCE -- the peak of the excitation waveform, exactly
+	// as the prototype's maxEsrc. Do not learn until the sensed modal amplitude
+	// is a set fraction of it.
+	//
+	// A running-maximum gate cannot do this job: on a rising edge the current
+	// sample IS the running maximum, so the gate is trivially satisfied by the
+	// numerical precursor that arrives long before the wave. Measured on the
+	// coax with a running-max gate: sheet 1 learned at timestep 220 when the
+	// wave needs 310 to reach it, sheet 2 at 2066 when it needs 3758, and the
+	// termination went from -13.7 dB to -9.8 dB. The reference has to be the
+	// EVENTUAL peak, which is what the excitation waveform supplies.
+	m_otfcSrcPeak = 0.0;
+	if (m_Op_ABC->m_Op != NULL)
+	{
+		Excitation* exc = m_Op_ABC->m_Op->GetExcitationSignal();
+		if ((exc != NULL) && (exc->GetVoltageSignal() != NULL))
+		{
+			const FDTD_FLOAT* sig = exc->GetVoltageSignal();
+			for (unsigned int n = 0; n < exc->GetLength(); ++n)
+				if (fabs(sig[n]) > m_otfcSrcPeak)
+					m_otfcSrcPeak = fabs(sig[n]);
+		}
+	}
+
+	// TIME GATE -- the guard the prototype gets from its look-ahead amplitude
+	// threshold, and the one thing a running-maximum gate cannot provide. On a
+	// rising edge the current sample IS the running maximum, so an
+	// amplitude-relative gate is trivially satisfied by the numerical precursor
+	// that arrives long before the wave does. Measured on the coax without this
+	// gate: sheet 1 learned at timestep 220 when the wave needs 310 to reach it,
+	// and sheet 2 at 2066 when it needs 3758. Both learned on dust, and the
+	// termination went from -13.7 dB to -9.8 dB.
+	//
+	// The excitation's own peak is the natural reference: by then the source has
+	// fully developed and, for any sane geometry, the wave is established at the
+	// sheet. Same source of truth Engine_Ext_Mur_ABC uses for its start delay.
+	m_otfcStartTS = 0;
+	if (m_Op_ABC->m_Op != NULL)
+	{
+		Excitation* exc = m_Op_ABC->m_Op->GetExcitationSignal();
+		if (exc != NULL)
+			m_otfcStartTS = exc->GetMaxExcitationTimestep();
+	}
 
 	// Initialize shifted position for V
 	m_pos_ny0_shift_V = m_posStart[m_ny] + (normalSignPositive  ? 1 : -1);
@@ -432,6 +483,216 @@ void Engine_Ext_Absorbing_BC::Apply2Voltages(int threadID)
 //  so read the modal amplitude one cell in, run it through the delay filter,
 //  and write the result onto the sheet. Three steps, no H field anywhere.
 // =========================================================================
+template <typename EngType, typename T>
+bool Engine_Ext_Absorbing_BC::RelearnModalTemplate(EngType* eng,
+                                                   ArrayLib::ArrayIJ<T>& modeP,
+                                                   ArrayLib::ArrayIJ<T>& modePP,
+                                                   unsigned int readPos)
+{
+#if !MODAL_OTFC_ENABLE
+	return false;
+#else
+	if (m_otfcFrozen || !m_Op_ABC->m_otfcScratchValid)
+		return false;
+	if (m_Eng->GetNumberOfTimesteps() < m_otfcStartTS)
+		return false;		// see m_otfcStartTS: do not learn on the precursor
+
+	const Operator* op = m_Op_ABC->m_Op;
+	unsigned int pos[3] = {0,0,0};
+	pos[m_ny] = readPos;
+
+	// LEARN ON THE EXISTING SUPPORT, not on the full aperture. Every cell where
+	// the current template is exactly zero is zero for a reason the sensed
+	// field cannot tell us: a conductor-owned edge (masked by GetVV == 0), or
+	// the trailing Yee line a transverse component does not have along its own
+	// direction. Re-deriving that support from a noisy field would resurrect
+	// exactly the phantom edge row that the full-aperture fix removed. The
+	// support is also demonstrably right where it matters -- on the coax the
+	// template carries 0.00% of its energy anywhere the field is dead.
+	//
+	// Pass 1: the sensed modal amplitude, and the candidate's norm. The
+	// candidate is (V/dl)/aSns, so aSns is the divisor the amplitude gate
+	// below is protecting, and dividing by it is what keeps the template's
+	// polarity locked to the field's instead of flipping with the pulse.
+	double aSns = 0.0;
+	double eNorm2 = 0.0;		// int E.E dA over the same support, for purity
+	for (unsigned int i = 0; i < m_numLines[0]; ++i)
+	{
+		pos[m_nyP] = m_posStart[m_nyP] + i;
+		for (unsigned int j = 0; j < m_numLines[1]; ++j)
+		{
+			pos[m_nyPP] = m_posStart[m_nyPP] + j;
+			double dA = op->GetNodeArea(m_ny, pos, false);
+			if (modeP(i,j) != 0.0)
+			{
+				double dl = op->GetEdgeLength(m_nyP, pos, false);
+				if (dl != 0.0)
+				{
+					double e = eng->EngType::GetVolt(m_nyP, pos) / dl;
+					aSns   += e * modeP(i,j) * dA;
+					eNorm2 += e * e * dA;
+				}
+			}
+			if (modePP(i,j) != 0.0)
+			{
+				double dl = op->GetEdgeLength(m_nyPP, pos, false);
+				if (dl != 0.0)
+				{
+					double e = eng->EngType::GetVolt(m_nyPP, pos) / dl;
+					aSns   += e * modePP(i,j) * dA;
+					eNorm2 += e * e * dA;
+				}
+			}
+		}
+	}
+	if (aSns == 0.0)
+		return false;
+	// Purity of the field against the template currently in use. The template
+	// is unit-norm, so this is (int E.m dA)^2 / (int E.E dA), the same quantity
+	// ProcessModeMatch reports -- and the direct measure of whether a re-learn
+	// is actually buying anything.
+	const double purityBefore = (eNorm2 > 0.0) ? (aSns * aSns) / eNorm2 : 0.0;
+
+	// AMPLITUDE GATE. The Octave prototype compares against a look-ahead peak
+	// of the excitation waveform (0.005*maxEsrc); there is no unit relation in
+	// openEMS between the excitation amplitude and a modal amplitude, so the
+	// scale has to come from the signal itself. The running maximum is that
+	// scale, and it makes the guarantee the prototype actually wanted: never
+	// divide by a value far below the largest one seen.
+	double absA = fabs(aSns);
+	if (absA > m_otfcSnsMax)
+		m_otfcSnsMax = absA;
+	if ((m_otfcSrcPeak <= 0.0) || (absA < MODAL_OTFC_GATE_FRAC * m_otfcSrcPeak))
+		return false;
+
+	// Pass 2: build the normalised candidate, and measure how far it moved
+	// from the previous one. Both are unit-norm, so the difference norm is a
+	// direct relative shape change.
+	double nrm2 = 0.0;
+	for (unsigned int i = 0; i < m_numLines[0]; ++i)
+	{
+		pos[m_nyP] = m_posStart[m_nyP] + i;
+		for (unsigned int j = 0; j < m_numLines[1]; ++j)
+		{
+			pos[m_nyPP] = m_posStart[m_nyPP] + j;
+			double dA = op->GetNodeArea(m_ny, pos, false);
+			double cP = 0.0, cPP = 0.0;
+			if (modeP(i,j) != 0.0)
+			{
+				double dl = op->GetEdgeLength(m_nyP, pos, false);
+				if (dl != 0.0) cP = (eng->EngType::GetVolt(m_nyP, pos) / dl) / aSns;
+			}
+			if (modePP(i,j) != 0.0)
+			{
+				double dl = op->GetEdgeLength(m_nyPP, pos, false);
+				if (dl != 0.0) cPP = (eng->EngType::GetVolt(m_nyPP, pos) / dl) / aSns;
+			}
+			nrm2 += (cP*cP + cPP*cPP) * dA;
+		}
+	}
+	if (nrm2 <= 0.0)
+		return false;
+	const double invN = 1.0 / sqrt(nrm2);
+
+	// Pass 3: normalise, and compare against the PREVIOUS candidate held in the
+	// scratch -- not against the current template. Comparing against the
+	// template would just re-measure the impurity we are here to remove (0.23
+	// on the coax), which no sane tolerance would ever accept. What tells dust
+	// from the mode is whether the candidate has stopped MOVING.
+	double diff2 = 0.0;
+	for (unsigned int i = 0; i < m_numLines[0]; ++i)
+	{
+		pos[m_nyP] = m_posStart[m_nyP] + i;
+		for (unsigned int j = 0; j < m_numLines[1]; ++j)
+		{
+			pos[m_nyPP] = m_posStart[m_nyPP] + j;
+			double dA = op->GetNodeArea(m_ny, pos, false);
+			double cP = 0.0, cPP = 0.0;
+			if (modeP(i,j) != 0.0)
+			{
+				double dl = op->GetEdgeLength(m_nyP, pos, false);
+				if (dl != 0.0) cP = ((eng->EngType::GetVolt(m_nyP, pos) / dl) / aSns) * invN;
+			}
+			if (modePP(i,j) != 0.0)
+			{
+				double dl = op->GetEdgeLength(m_nyPP, pos, false);
+				if (dl != 0.0) cPP = ((eng->EngType::GetVolt(m_nyPP, pos) / dl) / aSns) * invN;
+			}
+			double dP  = cP  - m_Op_ABC->m_otfcCandP(i,j);
+			double dPP = cPP - m_Op_ABC->m_otfcCandPP(i,j);
+			diff2 += (dP*dP + dPP*dPP) * dA;
+			m_Op_ABC->m_otfcCandP(i,j)  = cP;
+			m_Op_ABC->m_otfcCandPP(i,j) = cPP;
+		}
+	}
+	const double shapeChange = sqrt(diff2);
+
+	// SHAPE GATE. Before the pulse body arrives, the sense plane holds only
+	// numerical dust and its normalised shape jumps around; the prototype's
+	// MSL variant guards this with a time gate and the comment that learning
+	// on dust "detonates the run". Comparing successive candidates is the same
+	// guard without needing to know when the pulse arrives, and it is backed by
+	// measurement: the true transverse shape is constant to six decimals over
+	// 48 cells, so a candidate that has stopped moving IS the mode.
+	if (!m_otfcHavePrev)
+	{
+		m_otfcHavePrev = true;	// first candidate: nothing to compare against yet
+		return false;
+	}
+	if (shapeChange >= MODAL_OTFC_SHAPE_TOL)
+		return false;
+
+	// Adopt: straight replacement, exactly as the prototype.
+	for (unsigned int i = 0; i < m_numLines[0]; ++i)
+		for (unsigned int j = 0; j < m_numLines[1]; ++j)
+		{
+			if (modeP(i,j)  != 0.0) modeP(i,j)  = (T)m_Op_ABC->m_otfcCandP(i,j);
+			if (modePP(i,j) != 0.0) modePP(i,j) = (T)m_Op_ABC->m_otfcCandPP(i,j);
+		}
+
+	// Post-adopt audit: the new template must still be unit-norm, and the
+	// field's projection onto it must not have collapsed -- that projection is
+	// the whole signal the absorber acts on.
+	double newNorm2 = 0.0, aNew = 0.0;
+	for (unsigned int i = 0; i < m_numLines[0]; ++i)
+	{
+		pos[m_nyP] = m_posStart[m_nyP] + i;
+		for (unsigned int j = 0; j < m_numLines[1]; ++j)
+		{
+			pos[m_nyPP] = m_posStart[m_nyPP] + j;
+			double dA = op->GetNodeArea(m_ny, pos, false);
+			newNorm2 += ((double)modeP(i,j)*(double)modeP(i,j)
+			           + (double)modePP(i,j)*(double)modePP(i,j)) * dA;
+			if (modeP(i,j) != 0.0)
+			{
+				double dl = op->GetEdgeLength(m_nyP, pos, false);
+				if (dl != 0.0) aNew += (eng->EngType::GetVolt(m_nyP, pos)/dl) * modeP(i,j) * dA;
+			}
+			if (modePP(i,j) != 0.0)
+			{
+				double dl = op->GetEdgeLength(m_nyPP, pos, false);
+				if (dl != 0.0) aNew += (eng->EngType::GetVolt(m_nyPP, pos)/dl) * modePP(i,j) * dA;
+			}
+		}
+	}
+
+	++m_otfcCount;
+	if (m_otfcCount >= MODAL_OTFC_MAX_UPDATES)
+		m_otfcFrozen = true;
+
+	if (g_settings.GetVerboseLevel() > 0)
+		std::cerr << "Engine_Ext_Absorbing_BC: OTFC update " << m_otfcCount
+		          << " on plane " << readPos << " @TS " << m_Eng->GetNumberOfTimesteps()
+		          << ", |a|=" << absA << " (gate " << MODAL_OTFC_GATE_FRAC * m_otfcSrcPeak
+		          << ", srcPeak " << m_otfcSrcPeak << ", |a|max so far " << m_otfcSnsMax << ")"
+		          << ", purity before " << purityBefore
+		          << ", newNorm " << sqrt(newNorm2) << ", a_old " << aSns << " -> a_new " << aNew
+		          << ", shape change " << shapeChange
+		          << (m_otfcFrozen ? " (frozen)" : "") << std::endl;
+	return true;
+#endif
+}
+
 template <typename EngType>
 void Engine_Ext_Absorbing_BC::ApplyModalMur(EngType* eng)
 {
@@ -444,6 +705,22 @@ void Engine_Ext_Absorbing_BC::ApplyModalMur(EngType* eng)
 		return;
 
 	unsigned int pos[3] = {0,0,0};
+
+	// ---- 0. on-the-fly modal correction -----------------------------------
+	//  Re-learn the template BEFORE the read integral, so an update takes
+	//  effect in the same timestep it was measured -- the prototype's ordering
+	//  (its step 8 precedes the absorbers in step 9).
+	//
+	//  The sense plane is the read plane, optionally pushed further into the
+	//  guide. m_normalSign gives the direction from the sheet into the guide,
+	//  which is the same shift the read plane itself was built with.
+	{
+		long sensePos = (long)m_Op_ABC->m_MurReadPos
+		              + (long)MODAL_OTFC_SENSE_OFFSET * (long)m_normalSign;
+		if ((sensePos >= 0) && (sensePos < (long)op->GetNumberOfLines(m_ny)))
+			RelearnModalTemplate(eng, m_Op_ABC->m_MurModeP, m_Op_ABC->m_MurModePP,
+			                     (unsigned int)sensePos);
+	}
 
 	// ---- 1. read the modal amplitude one cell inside ----------------------
 	//  a = integral( E . m ) dA, with E = V/dl on each edge. The template is

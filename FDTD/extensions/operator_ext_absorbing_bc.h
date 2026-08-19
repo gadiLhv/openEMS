@@ -73,6 +73,88 @@
   */
 #define MODAL_MUR_MAX_ABS_H 1.02
 
+//! On-the-fly modal correction (OTFC): re-learn the modal template from the
+//! simulated field instead of trusting the mode file.
+/*!
+  WHY. The absorber can only act on what it can project onto, so the modal
+  PURITY of the field at the sheet is a hard floor on the termination. Measured
+  on the PTFE coax testbed (python/Tests/Coax_ModePurity_Diag.py):
+
+      purity = (int E.m dA)^2 / (int E.E dA) = 0.947015
+
+  at 1, 2, 3, 4, 6, 8, 12, 20, 32 and 48 cells from the source -- identical to
+  six decimals, so it is NOT evanescent higher-order content that dies away, it
+  is a static mismatch between the analytic mode file and the mode this mesh
+  actually supports. 74.6% of the residual hugs the staircased centre wire and
+  it carries a clean m=4 azimuthal signature: a circle on a Cartesian grid.
+  sqrt(1-purity) = 0.2302 = -12.76 dB, against a measured Modal Mur floor of
+  -13.65 dB on the same structure. The floor IS the mode file.
+
+  A template taken from the field itself scores purity 1.000000 at every plane
+  (residual -67 dB, the float32 noise floor of the dump) -- about 56 dB of
+  headroom. Hence: sense, replace, renormalise, freeze.
+
+  Ported from the Octave prototype WG_Modal_Absorption_3D_Coax_ProperYee.m
+  (lines 366-395), with the departures documented at the call site.
+
+  DEFAULT OFF, and the reason is a measured failure, not caution.
+  ---------------------------------------------------------------
+  The prototype NEVER combines OTFC with the one-way Modal Mur. Every Octave
+  script that has OTFC (Coax_ProperYee, Coax_S_Params, Rect_SParam,
+  Rect_Playground, MSL_SParam) drives the scalar E +- Zw*H splitter; every
+  Modal Mur script (Rect_ModalMur, WG_ModalMur_BoundaryTermination,
+  Rect_DispersiveFIR) keeps a FROZEN analytic basis. That separation turns out
+  to be load-bearing.
+
+  Wired to MODAL_MUR here, the correction is well-formed and still destroys the
+  termination. Measured on the coax: the gate fires cleanly mid-pulse
+  (timestep 12154, |a| = 0.285 against a 0.005 threshold), the new template has
+  norm 1.000000, the field's projection onto it GROWS (0.28492 -> 0.28904) and
+  the purity it reports goes 0.9717 -> 1.000000. Every local indicator says it
+  worked. And then the run stops converging and the energy climbs back toward
+  its peak: the boundary has become ACTIVE. Moving the sense plane 6 cells off
+  the sheet changes nothing, so it is not near-field feedback.
+
+  The reason is structural. Modal Mur writes E_sheet = FIR(<E_read, m>) * m and
+  is correct only if m is an EIGENMODE of the discrete transverse operator, so
+  that the two planes really are related by exp(-j*beta*dz). An instantaneous
+  field snapshot is not an eigenmode, however pure it measures against itself
+  -- and note that purity is self-referential the moment you adopt the field's
+  own shape as the template, so purity -> 1 is not evidence of anything. What
+  is left over does not propagate with that beta, gets re-projected and
+  re-radiated each step, and the loop has gain.
+
+  The splitter has no such requirement: it subtracts a bounded correction
+  rather than imposing a one-way relation between two planes. That is the
+  combination the prototype validates and the one to enable first.
+  */
+#define MODAL_OTFC_ENABLE 0
+
+//! Sensing plane, in cells BEYOND the absorber's own read plane, into the guide.
+/*!
+  The Octave prototype senses one cell downstream of the SOURCE (ksns = ksrc+1),
+  which a C++ absorber cannot do -- it has no idea where the source is. It does
+  not need to: the purity measurement above is flat to six decimals from 1 to 48
+  cells, so the plane genuinely does not matter, and the absorber's own read
+  plane is already being integrated every timestep. 0 is therefore free; a
+  positive value costs one extra plane read per step.
+  */
+#define MODAL_OTFC_SENSE_OFFSET 0
+
+//! Maximum number of template updates per sheet (Octave maxCtr, never reset).
+#define MODAL_OTFC_MAX_UPDATES 5
+
+//! Amplitude gate: only learn when |a_sense| >= this * the largest |a_sense|
+//! seen so far. This is the division guard -- a_sense is the divisor of the
+//! update, and dividing by a value far below the running maximum is how the
+//! prototype could detonate on pre-arrival numerical dust.
+#define MODAL_OTFC_GATE_FRAC 0.005
+
+//! Shape gate: relative change between successive candidate templates below
+//! which the shape is called converged. Dust fluctuates; the real mode does
+//! not (measured constant to six decimals along the whole line).
+#define MODAL_OTFC_SHAPE_TOL 1e-3
+
 class Operator_Ext_Absorbing_BC : public Operator_Extension
 {
 	friend class Engine_Ext_Absorbing_BC;
@@ -228,6 +310,24 @@ protected:
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_dH_nyP;
 	ArrayLib::ArrayIJ<FDTD_FLOAT>	m_dH_nyPP;
 	bool							m_deployTemplatesValid;
+
+	// ---- on-the-fly modal correction -------------------------------------
+	//
+	// Scratch for the OTFC candidate template, allocated once at build time
+	// alongside the templates it shadows. It exists so the PREVIOUS candidate
+	// survives long enough to be compared against the current one -- that
+	// comparison is the shape-convergence gate, and it is what distinguishes
+	// the real mode from pre-arrival numerical dust.
+	//
+	// Allocated here, in the operator, and never re-Init()ed: ArrayIJ::Init()
+	// frees and re-mallocs without zeroing, which is not something to do while
+	// worker threads are parked on a barrier holding pointers into it.
+	ArrayLib::ArrayIJ<double>	m_otfcCandP;
+	ArrayLib::ArrayIJ<double>	m_otfcCandPP;
+	bool						m_otfcScratchValid;
+
+	//! Allocate the OTFC scratch to match a template pair of the given size.
+	void AllocOTFCScratch(unsigned int P, unsigned int PP);
 
 
 
