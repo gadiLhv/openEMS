@@ -423,6 +423,25 @@ Engine_Extension* Operator_Ext_Excitation::CreateEngineExtention()
 	return new Engine_Ext_Excitation(this);
 }
 
+bool Operator_Ext_Excitation::GetExcitationPlane(int ny, unsigned int& pos) const
+{
+	if ((ny < 0) || (ny > 2) || (Volt_Count == 0) || (Volt_index[ny] == NULL))
+		return false;
+
+	unsigned int lo = Volt_index[ny][0];
+	unsigned int hi = lo;
+	for (unsigned int n = 1; n < Volt_Count; ++n)
+	{
+		if (Volt_index[ny][n] < lo) lo = Volt_index[ny][n];
+		if (Volt_index[ny][n] > hi) hi = Volt_index[ny][n];
+	}
+	if (lo != hi)
+		return false;		// not a single-plane launch; caller must decide
+
+	pos = lo;
+	return true;
+}
+
 void Operator_Ext_Excitation::ShowStat(std::ostream &ostr)  const
 {
 	Operator_Extension::ShowStat(ostr);

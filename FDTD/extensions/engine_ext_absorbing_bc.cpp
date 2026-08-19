@@ -33,6 +33,7 @@
 #include "operator_ext_absorbing_bc.h"
 #include "FDTD/engine.h"
 #include "FDTD/excitation.h"
+#include "FDTD/extensions/operator_ext_excitation.h"
 #include "FDTD/engine_sse.h"
 #include "FDTD/engine_interface_fdtd.h"
 #include "tools/array_ops.h"
@@ -99,6 +100,7 @@ Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_e
 	// termination went from -13.7 dB to -9.8 dB. The reference has to be the
 	// EVENTUAL peak, which is what the excitation waveform supplies.
 	m_otfcSrcPeak = 0.0;
+	m_otfcSensePos = (unsigned int)-1;		// -1 = no usable sense plane, OTFC idle
 	if (m_Op_ABC->m_Op != NULL)
 	{
 		Excitation* exc = m_Op_ABC->m_Op->GetExcitationSignal();
@@ -109,6 +111,23 @@ Engine_Ext_Absorbing_BC::Engine_Ext_Absorbing_BC(Operator_Ext_Absorbing_BC* op_e
 				if (fabs(sig[n]) > m_otfcSrcPeak)
 					m_otfcSrcPeak = fabs(sig[n]);
 		}
+
+		// SENSE PLANE: ksrc + MODAL_OTFC_SENSE_OFFSET, shared by every sheet,
+		// exactly as the prototype's single ksns serves both absorbers. Keyed
+		// to the SOURCE and not to this sheet -- sampling next to the sheet
+		// reads back the sheet's own write and iterates on it.
+		Operator_Ext_Excitation* excExt = m_Op_ABC->m_Op->GetExcitationExtension();
+		unsigned int srcPos = 0;
+		if ((excExt != NULL) && excExt->GetExcitationPlane(m_ny, srcPos))
+		{
+			unsigned int cand = srcPos + MODAL_OTFC_SENSE_OFFSET;
+			if (cand < m_Op_ABC->m_Op->GetNumberOfLines(m_ny))
+				m_otfcSensePos = cand;
+		}
+		if ((m_otfcSensePos == (unsigned int)-1) && (g_settings.GetVerboseLevel() > 0))
+			std::cerr << "Engine_Ext_Absorbing_BC: no single-plane excitation found along ny="
+			          << m_ny << "; on-the-fly modal correction disabled for this sheet."
+			          << std::endl;
 	}
 
 	// TIME GATE -- the guard the prototype gets from its look-ahead amplitude
@@ -714,13 +733,9 @@ void Engine_Ext_Absorbing_BC::ApplyModalMur(EngType* eng)
 	//  The sense plane is the read plane, optionally pushed further into the
 	//  guide. m_normalSign gives the direction from the sheet into the guide,
 	//  which is the same shift the read plane itself was built with.
-	{
-		long sensePos = (long)m_Op_ABC->m_MurReadPos
-		              + (long)MODAL_OTFC_SENSE_OFFSET * (long)m_normalSign;
-		if ((sensePos >= 0) && (sensePos < (long)op->GetNumberOfLines(m_ny)))
-			RelearnModalTemplate(eng, m_Op_ABC->m_MurModeP, m_Op_ABC->m_MurModePP,
-			                     (unsigned int)sensePos);
-	}
+	if (m_otfcSensePos != (unsigned int)-1)
+		RelearnModalTemplate(eng, m_Op_ABC->m_MurModeP, m_Op_ABC->m_MurModePP,
+		                     m_otfcSensePos);
 
 	// ---- 1. read the modal amplitude one cell inside ----------------------
 	//  a = integral( E . m ) dA, with E = V/dl on each edge. The template is

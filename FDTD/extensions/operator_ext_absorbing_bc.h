@@ -97,49 +97,37 @@
   Ported from the Octave prototype WG_Modal_Absorption_3D_Coax_ProperYee.m
   (lines 366-395), with the departures documented at the call site.
 
-  DEFAULT OFF, and the reason is a measured failure, not caution.
-  ---------------------------------------------------------------
-  The prototype NEVER combines OTFC with the one-way Modal Mur. Every Octave
-  script that has OTFC (Coax_ProperYee, Coax_S_Params, Rect_SParam,
-  Rect_Playground, MSL_SParam) drives the scalar E +- Zw*H splitter; every
-  Modal Mur script (Rect_ModalMur, WG_ModalMur_BoundaryTermination,
-  Rect_DispersiveFIR) keeps a FROZEN analytic basis. That separation turns out
-  to be load-bearing.
-
-  Wired to MODAL_MUR here, the correction is well-formed and still destroys the
-  termination. Measured on the coax: the gate fires cleanly mid-pulse
-  (timestep 12154, |a| = 0.285 against a 0.005 threshold), the new template has
-  norm 1.000000, the field's projection onto it GROWS (0.28492 -> 0.28904) and
-  the purity it reports goes 0.9717 -> 1.000000. Every local indicator says it
-  worked. And then the run stops converging and the energy climbs back toward
-  its peak: the boundary has become ACTIVE. Moving the sense plane 6 cells off
-  the sheet changes nothing, so it is not near-field feedback.
-
-  The reason is structural. Modal Mur writes E_sheet = FIR(<E_read, m>) * m and
-  is correct only if m is an EIGENMODE of the discrete transverse operator, so
-  that the two planes really are related by exp(-j*beta*dz). An instantaneous
-  field snapshot is not an eigenmode, however pure it measures against itself
-  -- and note that purity is self-referential the moment you adopt the field's
-  own shape as the template, so purity -> 1 is not evidence of anything. What
-  is left over does not propagate with that beta, gets re-projected and
-  re-radiated each step, and the loop has gain.
-
-  The splitter has no such requirement: it subtracts a bounded correction
-  rather than imposing a one-way relation between two planes. That is the
-  combination the prototype validates and the one to enable first.
+  WHERE IT SAMPLES IS THE WHOLE GAME. Wired to sample at each absorber's own
+  read plane, this made the coax termination ACTIVE -- energy climbed back to
+  its peak -- even though every local indicator looked perfect: template norm
+  1.000000, projection growing 0.28492 -> 0.28904, successive candidates
+  differing by 4e-7, purity 0.9717 -> 1.000000. The indicators lie because the
+  measurement was circular: the sheet writes aOut*m and one cell later that
+  write is read back and adopted as the new m. Note also that purity is
+  self-referential once the template IS the field's own shape, so purity -> 1
+  proves the code ran and nothing else. See MODAL_OTFC_SENSE_OFFSET.
   */
-#define MODAL_OTFC_ENABLE 0
+#define MODAL_OTFC_ENABLE 1
 
-//! Sensing plane, in cells BEYOND the absorber's own read plane, into the guide.
+//! Sensing plane, in cells past the EXCITATION plane (ksns = ksrc + this).
 /*!
-  The Octave prototype senses one cell downstream of the SOURCE (ksns = ksrc+1),
-  which a C++ absorber cannot do -- it has no idea where the source is. It does
-  not need to: the purity measurement above is flat to six decimals from 1 to 48
-  cells, so the plane genuinely does not matter, and the absorber's own read
-  plane is already being integrated every timestep. 0 is therefore free; a
-  positive value costs one extra plane read per step.
+  The sense plane is a property of the problem, not of a sheet, and it belongs
+  next to the source. Both absorbers share it, exactly as the prototype's single
+  ksns serves kA1 and kA2.
+
+  Sampling at the absorber's own read plane instead -- which is what a
+  self-contained sheet would naturally do, and what this first tried -- closes a
+  loop: the sheet writes aOut*m, one cell later that write is read back and
+  adopted as the new m. That is a fixed-point iteration on the absorber's own
+  output, not a measurement of the guide, and it drove the coax termination
+  active. Next to the source the field is the freshly launched wave, and it
+  knows nothing about any absorber.
+
+  Keep this small. 1 or 2 cells is the useful range: far enough that the raw
+  injected profile has become a real propagating field, near enough that it is
+  still a clean one-way wave with no accumulated reflection.
   */
-#define MODAL_OTFC_SENSE_OFFSET 0
+#define MODAL_OTFC_SENSE_OFFSET 1
 
 //! Maximum number of template updates per sheet (Octave maxCtr, never reset).
 #define MODAL_OTFC_MAX_UPDATES 5

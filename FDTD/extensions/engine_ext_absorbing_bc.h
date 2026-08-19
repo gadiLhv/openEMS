@@ -149,6 +149,7 @@ protected:
 	bool			m_otfcFrozen;		// true once the template is final
 	bool			m_otfcHavePrev;		// a previous candidate exists to compare
 	double			m_otfcSrcPeak;		// peak of the excitation waveform (Octave maxEsrc)
+	unsigned int	m_otfcSensePos;		// ksrc + offset; (unsigned)-1 = idle
 	unsigned int	m_otfcStartTS;		// no learning before this timestep
 
 
