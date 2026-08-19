@@ -33,15 +33,42 @@
                  stable; four is the default, for margin and because it
                  measures best.
 
- WHICH ONE TO USE ON A COAX: SCALAR, by 12-19 dB. Measured here, worst
- |Gamma| in band: scalar -32.1 dB, Modal Mur -13.7 dB. That is the expected
- answer and it is worth saying why. A coax TEM mode has no cutoff, so its wave
- impedance is a real constant and the direction test E = +-Zw*H -- the thing
- that fails for a waveguide near cutoff -- works perfectly. Modal Mur buys
- dispersion this line does not have, and pays for it: nu = v*dt/dz = 0.026 here
- means 38 timesteps per cell, so the delay filter needs 2048 taps to stay
- passive and its residual error is what sets the -14 dB floor. Use Modal Mur
- where there IS a cutoff.
+ WHICH ONE TO USE ON A COAX -- READ THE CONTROLS FIRST
+ -----------------------------------------------------
+ The two methods cannot be given the same surroundings. Modal Mur is a one-way
+ overwrite and REQUIRES a PEC face; the scalar splitter needs a live E at its
+ plane and CANNOT have one. So any head-to-head compares arrangements, not
+ sheets, and the surroundings have to be measured too. On this bench, same
+ geometry, same ruler, worst |Gamma| in band:
+
+     PEC face + Modal Mur sheet on it .............. -13.7 dB
+     MUR face, NO sheet at all  (control) .......... -22.3 dB
+     MUR face + scalar sheet 4 cells in ............ -31.9 dB
+     PEC face + scalar sheet 4 cells in ............ DIVERGES
+
+ Read those four lines together, because three of them are uncomfortable:
+
+  - Plain first-order Mur already beats the Modal Mur sheet by 8.6 dB. That is
+    not a scandal, it is what Mur IS: exact for a normally incident wave at the
+    velocity it was tuned to, and a coax TEM wave arriving at a flat end face is
+    exactly that. There is very little here for a modal absorber to add.
+
+  - The scalar arrangement's -31.9 dB is NOT the sheet's own figure. The sheet
+    is worth about 9.6 dB on top of the Mur boundary behind it; the Mur is
+    worth 22.3.
+
+  - Put PEC behind the scalar sheet -- taking the Mur away so the sheet has to
+    do all the work -- and it does not merely get worse, it DIVERGES. With
+    nu = 0.026 the matched correction gain is 0.051, so the sheet corrects far
+    too slowly to control the shorted stub it now sits in front of.
+
+ The honest conclusion: on a coax, use the scalar sheet in front of a Mur
+ boundary; do not read its number as the sheet's own performance, and do not
+ conclude from it that the scalar splitter is the stronger absorber. The place
+ to compare the two methods is a guide with a REAL CUTOFF, where Mur has no
+ single correct velocity to be tuned to and the direction test E = +-Zw*H
+ breaks down -- which is what forced the one-way reformulation in the first
+ place. See RectWG_W_ModalMur.py.
 
  MEASUREMENT
  -----------
@@ -71,7 +98,7 @@ from openEMS.physical_constants import *
 from openEMS import utilities
 
 # ## Which termination to test
-MODE = 'SCALAR'       # 'SCALAR' (Zw splitter, best on a coax) or 'MUR' (Modal Mur on PEC)
+MODE = 'SCALAR'       # 'SCALAR' (Zw splitter + Mur face) or 'MUR' (Modal Mur on PEC)
 
 Sim_Path = os.path.join(tempfile.gettempdir(), 'Test_Coax_ModalMur_' + MODE)
 if not os.path.exists(Sim_Path):
