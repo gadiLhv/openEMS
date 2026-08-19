@@ -1095,6 +1095,11 @@ void openEMS::SetGaussExcite(double f0, double fc)
 	this->InitExcitation();
 	m_Exc->SetupGaussianPulse(f0, fc);
 }
+void openEMS::SetExciteZeroMean(bool val)
+{
+	m_Exc->SetZeroMean(val);
+}
+
 
 void openEMS::SetSinusExcite(double f0)
 {
