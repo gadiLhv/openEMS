@@ -511,6 +511,20 @@ bool Engine_Ext_Absorbing_BC::RelearnModalTemplate(EngType* eng,
 #if !MODAL_OTFC_ENABLE
 	return false;
 #else
+	// Runtime override, so the correction can be A/B'd without a rebuild:
+	//   OPENEMS_ABC_OTFC=0   force off
+	//   OPENEMS_ABC_OTFC=1   force on (same as the predef default)
+	// Unset leaves MODAL_OTFC_ENABLE in charge. Settable from Python with
+	// os.environ['OPENEMS_ABC_OTFC'] = '0' before FDTD.Run(), since the engine
+	// runs in-process. Same pattern as OPENEMS_ABC_MEASURE_ONLY above.
+	static const bool otfc_off = []() {
+		const char* e = getenv("OPENEMS_ABC_OTFC");
+		return (e != NULL) && ((e[0] == '0') || (e[0] == 'n') || (e[0] == 'N')
+		                       || (e[0] == 'f') || (e[0] == 'F'));
+	}();
+	if (otfc_off)
+		return false;
+
 	if (m_otfcFrozen || !m_Op_ABC->m_otfcScratchValid)
 		return false;
 	if (m_Eng->GetNumberOfTimesteps() < m_otfcStartTS)
