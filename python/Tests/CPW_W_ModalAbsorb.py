@@ -1,43 +1,96 @@
 """
  Coplanar waveguide terminated by modal absorbers.
 
- NOT YET VALIDATED. It runs and converges, but its through-transmission
- disagrees with the reference by ~6 dB and the disagreement is real, not a
- post-processing artefact. See "WHAT MAKES CPW THE HARD ONE" below.
+ The centre strip is 1.15 mm wide and that is NOT negotiable -- it is set by
+ CPW_E.csv / CPW_H.csv.  See "THE MODE FILE DEFINES THE GEOMETRY" below.
 
- Rebuilt on the geometry and mesh of CPW_With_WG_Ports.py, which is the
- validated reference and, crucially, the aperture CPW_E.csv / CPW_H.csv were
- generated for. The previous absorber script used port_w_fact = 1.0 and
- port_h_fact = 2.0, giving a 2 x 3 mm window where the mode file describes
- 8.5 x 7.0 mm -- the templates were being read through the wrong aperture.
+ Built on the geometry and mesh of CPW_With_WG_Ports.py, which is the validated
+ reference and the aperture the mode files were generated for.
+
+ THE MODE FILE DEFINES THE GEOMETRY
+ ----------------------------------
+ A mode CSV carries no metadata: it is four columns of numbers whose first two
+ are LOCAL coordinates measured from the defining box's start corner.  Nothing
+ checks that the structure you then build is the structure the file describes,
+ so a geometry mismatch is silent -- it shows up only as lost energy.
+
+ The column order follows openEMS's cyclic transverse convention.  For a sheet
+ with normal 'y' (ny=1) that is nP=z, nPP=x, and ProcessModeMatch::InitProcess
+ calls LinInterp2(loc[nP], loc[nPP], ModeDist[0], ModeDist[1]).  So for these
+ files:
+
+     col0 = z local to the box start (here z = -2.5 mm)
+     col1 = x local to the box start (here x = -Line_W*(1+port_w_fact)/2)
+     col2 = E_z   (symmetric across the line)
+     col3 = E_x   (antisymmetric across the line)
+
+ Read that way, CPW_E.csv reconstructs its own generating geometry exactly:
+
+     col0 spans 0 .. 7.000, with lines at 2.5, 2.75, 3.0, 3.25, 3.5, 3.6
+          -> substrate 0..1 mm (substrate_cells = 4) and 0.1 mm of copper.
+             substrate_thickness = 1.0 and port_h_fact = 3.5.  MATCHES.
+
+     col1 spans 0 .. 9.775, with 0.1 mm steps over 4.0125..4.3125 and
+          5.4625..5.7625 (the two 0.3 mm gaps) and 0.16429 mm steps over
+          4.3125..5.4625 between them.
+          -> the strip is 1.1500 mm wide, centred at 4.8875, in a window
+             1.15*(1+7.5)/2*2 = 9.775 mm wide.  Line_W = 1.15.
+
+ An earlier version of this script set Line_W = 1.0.  The z axis still matched
+ (substrate_thickness is unchanged), so the file loaded, interpolated and
+ normalised without a single complaint -- but the aperture was then 8.5 mm
+ instead of 9.775 mm, and because the local origin sits at the box corner the
+ template centre landed at local x = 4.8875 while the real strip sat at 4.25.
+ That is a 0.6375 mm offset, more than half a strip width: the template's
+ centre conductor was projected onto the gap and the outer 1.275 mm of the file
+ was never sampled at all.  The symptom was a raw |U2/U1| of -2.76 dB where the
+ reference reads -0.26 dB, and an energy balance of 0.125-0.277 against 0.974.
+
+ The lesson generalises to every mode file in this directory: when a modal
+ result is bad in a way the absorber cannot explain, RECONSTRUCT THE GEOMETRY
+ FROM THE FILE'S OWN COORDINATE COLUMNS before touching the absorber.
+
+ MEASURED AFTER THE FIX (MODE = 'SCALAR', 29043 timesteps to -54.2 dB)
+ ---------------------------------------------------------------------
+                              before (Line_W=1.0)   after (Line_W=1.15)   reference
+     |S21| at 2 GHz              -7.06 dB              +0.15 dB            -0.52 dB
+     |S11|^2 + |S21|^2           0.125-0.277           1.102-1.195         0.974
+     worst modal-fit |Gamma|     --                    -16.54 dB (3 GHz)   --
+
+ The lost energy came back, which is what confirms the diagnosis.  Two things
+ are NOT yet explained and are open:
+
+   * The balance sits ~10-20% ABOVE unity.  Over-unity is a de-embedding
+     artefact, not physics; suspect the ref_impedance / ZL pair.
+   * The residual -16.5 dB reflection.  It is NOT the impedance and NOT a
+     rotation: the pointwise |E|/|H| in the mode files has median 252.1 against
+     the assumed Zw_mode = 254, and H is cleanly h = zhat x e (mean cos 0.9916
+     over the aperture).  The mode-match probes read purity 0.511 at all nine
+     ladder planes -- flat, so a static mismatch like the coax.  But BEWARE the
+     analogy: on the coax, impurity -12.76 dB predicted the -13.65 dB floor
+     almost exactly, whereas here impurity -3.11 dB sits well BELOW a -16.5 dB
+     floor.  On an open structure the aperture holds real non-modal content
+     (radiation, the slot-line mode) that purity counts and the absorber is not
+     obliged to terminate, so purity is not a floor predictor here.
+
+ MODE = 'MUR' IS UNSTABLE ON THIS STRUCTURE
+ ------------------------------------------
+ With the geometry corrected, the Modal Mur path shows slow growth: energy
+ bottoms near -36.5 dB around timestep 78k and then climbs monotonically,
+ reaching -11.8 dB by timestep 196k, roughly +1 dB per 10k steps.  The
+ mis-centred template had been masking this by barely coupling to the mode at
+ all.  SCALAR on the same geometry converges to -54.2 dB in 29k steps with no
+ growth whatever, so SCALAR is the default here.
+
+ A plausible cause, untested: the Modal Mur delay filter is built from ONE
+ phase velocity across the whole aperture, and a CPW mode straddling air and
+ FR4 does not have one.  The fit measures n_eff = 1.525-1.540 while
+ beta_ref = 62.5 implies 1.492.
 
  WHAT MAKES CPW THE HARD ONE
  ---------------------------
   * It is an OPEN structure, so some radiation is expected and |S11| has a floor
     that has nothing to do with the termination.
-
-    BUT DO NOT USE THAT TO EXCUSE THE CURRENT NUMBERS. Measured against
-    CPW_With_WG_Ports.py, the validated reference on the same geometry and the
-    same mode files, this script does NOT yet agree:
-
-                              reference        this script
-        |S21| at 2 GHz          -0.52 dB          -7.06 dB
-        |S11|^2+|S21|^2          0.974            0.125-0.277
-        raw |U2/U1| at 2 GHz    -0.26 dB          -2.76 dB
-
-    The last row is the one that matters: it is the RAW modal voltage ratio
-    between the two port probes, before any de-embedding. The reference loses
-    0.26 dB between its ports and this script loses 2.76 dB, so the energy is
-    genuinely going somewhere and it is not a post-processing artefact. The
-    de-embedding then widens the gap further.
-
-    So the balance sitting at 0.2 is NOT "a CPW radiates". It is unexplained.
-    Suspects, in the order worth checking: the reference calls
-    FDTD.AddEdges2Grid(dirs='xyz', properties=line), which this does not; the
-    reference's ports sit in the airbox straddling the substrate edge at y=0
-    and y=substrate_length, where the mode files were generated, whereas these
-    sit well inside a substrate that now spans the whole domain; and the metal
-    here runs into the transverse MUR boundaries instead of stopping short.
   * There is METAL INSIDE THE APERTURE (centre strip and both grounds), so the
     conductor mask on the deployment template is doing real work here.
   * Quasi-TEM, so no cutoff and the scalar Zw splitter applies.
@@ -88,7 +141,7 @@ from openEMS import utilities
 MODE = 'SCALAR'
 
 # Dump the whole box for inspection in ParaView. Large: budget a few hundred MB.
-DUMP_FIELDS = False
+DUMP_FIELDS = True
 
 Sim_Path = os.path.join(tempfile.gettempdir(), 'Test_CPW_ModalAbsorb_' + MODE)
 if not os.path.exists(Sim_Path):
@@ -100,12 +153,12 @@ post_proc_only = False
 display_structure = False
 
 # ## Geometry (drawing units = mm) -- from CPW_With_WG_Ports.py
-Line_W = 1.0
+Line_W = 1.15  # SET BY THE MODE FILE. See the header. Do NOT change to 1.0.
 CPW_gap = 0.3
 cu_thick = 0.1
 substrate_epsR = 4.3
 substrate_width = 11.0
-substrate_length = 80.0          # longer than the reference: the fit ladder needs room
+substrate_length = 80.0  # longer than the reference: the fit ladder needs room
 substrate_thickness = 1.0
 substrate_cells = 4
 gap_cells = 3
@@ -122,10 +175,10 @@ unit = 1e-3
 f0, fc_exc = 2e9, 1e9
 
 # Modal parameters (same values the reference uses)
-beta_ref = 62.5                      # 1/m from a mode solver, at f0
+beta_ref = 62.5  # 1/m from a mode solver, at f0
 v_phase = 2 * pi * f0 / beta_ref
-Zw_mode = 254.0                      # modal wave impedance, Ohm
-Zl = 45.0                            # line impedance for the port de-embed
+Zw_mode = 254.0  # modal wave impedance, Ohm
+Zl = 45.0  # line impedance for the port de-embed
 
 # ## FDTD setup
 FDTD = openEMS(NrTS=300000, EndCriteria=1e-5)
@@ -336,8 +389,8 @@ print('   slot-line mode and radiates, and neither fits a single-mode split.')
 bal = np.abs(s11) ** 2 + np.abs(s21) ** 2
 print('energy balance |S11|^2+|S21|^2: min {:.3f}  max {:.3f}'.format(bal.min(), bal.max()))
 print('   Reference CPW_With_WG_Ports.py on this geometry reads 0.974 at 2 GHz')
-print('   with |S21| = -0.52 dB. A balance near 0.2 here is NOT radiation --')
-print('   see the header. Treat these numbers as not yet validated.')
+print('   with |S21| = -0.52 dB. A balance BELOW ~0.9 means the mode file and')
+print('   the geometry disagree -- see the header before blaming radiation.')
 
 figure()
 plot(f / 1e9, Gam_dB, 'm-', linewidth=2, label=r'$|\Gamma|$ modal fit (E-only)')
