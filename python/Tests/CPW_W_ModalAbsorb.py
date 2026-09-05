@@ -57,14 +57,50 @@
      |S11|^2 + |S21|^2           0.125-0.277           1.102-1.195         0.974
      worst modal-fit |Gamma|     --                    -16.54 dB (3 GHz)   --
 
- The lost energy came back, which is what confirms the diagnosis.  Two things
- are NOT yet explained and are open:
+ The lost energy came back, which is what confirms the diagnosis.
+
+ REGENERATING THE MODE FILE ON THE EXACT SIM GRID CHANGED ALMOST NOTHING.
+ CPW_E.csv / CPW_H.csv were re-solved on the identical (x, z) mesh this script
+ builds (25 x 19 lines, bit-identical), with every constant taken from the same
+ solver run via CPW_mode_params.json.  Worst modal-fit |Gamma| went -16.54 dB
+ -> -16.99 dB and the probe purity stayed at 0.51.  So the residual is NOT a
+ grid mismatch and NOT the geometry.  It splits in two, both measured by
+ CPW_ModePurity_Diag.py:
+
+   * HALF-CELL REGISTRATION, worth 0.51 -> 0.75 purity.  A rigid (-0.5, -0.5)
+     cell shift of the template beats no shift.  This is a real defect on the
+     MEASURE side: processmodematch.cpp:180-218 takes ONE coordinate per grid
+     point, GetDiscLine(nP, pos, dualMesh), and looks BOTH transverse
+     components up there -- but E_nP and E_nPP sit at the centres of their own
+     edges, half a cell apart in different directions.  The DEPLOY side already
+     gets this right: operator_ext_absorbing_bc.cpp:427-440 does two separate
+     LinInterp2 calls, dual line along each component's own direction.  MODAL
+     therefore measures on one basis and deploys on another; MODAL_MUR, which
+     uses the operator templates for both, is unaffected.  No mode file can fix
+     this -- it is a sampling-path bug.
+
+   * SHAPE, worth the remaining 0.75 -> 1.00.  A template learned from the
+     field scores 1.000000 at planes +2, +12 and +40, and is consistent across
+     them to 0.9967, so the field IS a clean single mode -- the FEM continuum
+     mode and the staircased Yee mode simply differ.  Same situation as the
+     coax (purity 0.947 there), worse here because CPW has metal edges inside
+     the aperture.  This is what the on-the-fly correction (OTFC) is for.
+
+ One thing is NOT yet explained and is open:
 
    * The balance sits ~10-20% ABOVE unity.  Over-unity is a de-embedding
-     artefact, not physics; suspect the ref_impedance / ZL pair.
+     artefact, not physics.  ZL is NOT the cause and never was: CalcPort sets
+     self.ZL from it but then uses Z_ref = ref_impedance for the whole
+     incident/reflected split (ports.py:143-146), so ZL is inert whenever
+     ref_impedance is given -- correcting it from 45 to the solver's 96.57
+     moved nothing.  That leaves ref_impedance = Zw, and Zw is corroborated
+     twice (solver 254.23, pointwise |E|/|H| median 252.0).  The remaining
+     suspect is the mode-file NORMALISATION: ProcessModeMatch L2-normalises E
+     and H independently, so u/i on a pure forward wave need not equal the
+     physical Zw.
    * The residual -16.5 dB reflection.  It is NOT the impedance and NOT a
      rotation: the pointwise |E|/|H| in the mode files has median 252.1 against
-     the assumed Zw_mode = 254, and H is cleanly h = zhat x e (mean cos 0.9916
+     the solver's Zw = 254.23, and H is cleanly h = zhat x e (mean cos 0.9891
      over the aperture).  The mode-match probes read purity 0.511 at all nine
      ladder planes -- flat, so a static mismatch like the coax.  But BEWARE the
      analogy: on the coax, impurity -12.76 dB predicted the -13.65 dB floor
@@ -73,19 +109,65 @@
      (radiation, the slot-line mode) that purity counts and the absorber is not
      obliged to terminate, so purity is not a floor predictor here.
 
+ TWO GEOMETRY BUGS FOUND BY COMPARING AGAINST openEMS's OWN CONDUCTOR MAP
+ ------------------------------------------------------------------------
+ Dumping, for every E edge on the port plane, the mode-file amplitude next to
+ openEMS's GetVV() (== 0 means the edge is conductor-owned) turns "the mode
+ looks wrong" into a list of specific disagreeing edges.  It found two things.
+
+ 1. mesh.GetLines() IS NOT SORTED.  CSRectGrid::GetLines defaults to
+    do_sort=False and does not deduplicate, so it returns lines in INSERTION
+    order: here [0, 80] from SimBox, then the arange list starting with another
+    0.  Every index computed off it was +2 from the real mesh and ny counted the
+    duplicate -- the absorber sat 2 cells inside its intended plane, making
+    SCALAR_INSET an effective 2.  Only bites the axis that skips
+    SmoothMeshLines (which sorts internally), which is why y looked like the
+    hard case.  Fixed with np.unique + an assert.  Worth 0.02 dB, but it made
+    every plane in this script land somewhere other than where it reads.
+
+ 2. THE MODE SOLVER HAD A PEC WALL ON THE PORT WINDOW.  mesh_gen_CPW.py set the
+    solver domain to the port aperture and put its whole outline in the
+    "bounds" group, which blit_mode_solver constrains -- an electric wall.
+    openEMS has an open window with the substrate and grounds running through it
+    out to +-5.5 mm.  Measured: the file forced E to zero on 52 of the 82 free
+    edges around the window perimeter (24 of 24 along z = -2.5).
+    mesh_gen_for_modeSim_CPW.py now meshes openEMS's actual cross-section out to
+    the SimBox; the window is sampled, never walled.  Perimeter zeros: 52 -> 0.
+
+ WHAT THAT BOUGHT, AND WHAT IT DID NOT
+ -------------------------------------
+                              worst |Gam|   fit resid   n_eff over band
+     old .geo (walled)          -17.56 dB    7.03e-03    1.500-1.540 (drifts)
+     new .geo, corner 0.05 mm   -14.46 dB    1.52e-03    1.5400 (flat)
+     new .geo, corner 0.15 mm   -16.41 dB    1.47e-03    1.5400 (flat)
+     new .geo, corner 0.30 mm   -16.28 dB    1.51e-03    1.5400 (flat)
+
+ The mode itself got much better and stayed better across every corner mesh
+ size: the two-exponential fit residual dropped ~5x and n_eff stopped drifting.
+ Zl also became physical (48.9 Ohm, against 184 and 34 on earlier meshes).
+ |Gamma| did NOT improve.  Since |Gamma| is flat-ish against the one remaining
+ mesh knob while the mode quality is not, the residual reflection is very
+ unlikely to be a mode-file problem any more.
+
+ The eight conducting-corner samples (x = +-0.575, +-0.875 at z = 1.0, 1.1) are
+ still non-zero where openEMS has metal.  That is the FEM corner singularity,
+ not a geometry error -- the nodal value there is finite only because the
+ element is finite -- and it is what CORNER_H trades against.
+
  MODE = 'MUR' IS UNSTABLE ON THIS STRUCTURE
  ------------------------------------------
- With the geometry corrected, the Modal Mur path shows slow growth: energy
- bottoms near -36.5 dB around timestep 78k and then climbs monotonically,
- reaching -11.8 dB by timestep 196k, roughly +1 dB per 10k steps.  The
- mis-centred template had been masking this by barely coupling to the mode at
- all.  SCALAR on the same geometry converges to -54.2 dB in 29k steps with no
- growth whatever, so SCALAR is the default here.
+ The Modal Mur path DIVERGES here.  Energy bottoms near -33 dB around timestep
+ 83k and then climbs monotonically to -2.3 dB by 292k; the run ends with an
+ energy balance of 362 and |S11| = +24.7 dB, i.e. an active boundary.  Giving
+ it the solver's true fc = -2.222 GHz instead of fc = 0 did not help.  The
+ mis-centred template had been masking this by barely coupling to the mode.
+ SCALAR on the same geometry converges to -56 dB in 29k steps with no growth
+ whatever, so SCALAR is the default here.
 
  A plausible cause, untested: the Modal Mur delay filter is built from ONE
  phase velocity across the whole aperture, and a CPW mode straddling air and
  FR4 does not have one.  The fit measures n_eff = 1.525-1.540 while
- beta_ref = 62.5 implies 1.492.
+ beta_ref = 62.66 implies 1.4948.
 
  WHAT MAKES CPW THE HARD ONE
  ---------------------------
@@ -125,7 +207,7 @@
  (c) 2023-2026 Gadi Lahav <gadi@rfwithcare.com>
 """
 
-import os, tempfile, shutil
+import os, json, tempfile, shutil
 import numpy as np
 from pylab import *
 
@@ -138,10 +220,10 @@ from openEMS import utilities
 #   'SCALAR' -- Zw splitter, inset inside a MUR face (quasi-TEM: the natural one)
 #   'MUR'    -- Dispersive Modal Mur, on a PEC face, declared as the kc -> 0
 #               limit of a TM mode (fc = 0)
-MODE = 'SCALAR'
+MODE = os.environ.get('CPW_ABS_MODE', 'MUR')
 
 # Dump the whole box for inspection in ParaView. Large: budget a few hundred MB.
-DUMP_FIELDS = True
+DUMP_FIELDS = bool(int(os.environ.get('CPW_DUMP_FIELDS', '1')))
 
 Sim_Path = os.path.join(tempfile.gettempdir(), 'Test_CPW_ModalAbsorb_' + MODE)
 if not os.path.exists(Sim_Path):
@@ -174,14 +256,27 @@ unit = 1e-3
 
 f0, fc_exc = 2e9, 1e9
 
-# Modal parameters (same values the reference uses)
-beta_ref = 62.5  # 1/m from a mode solver, at f0
-v_phase = 2 * pi * f0 / beta_ref
-Zw_mode = 254.0  # modal wave impedance, Ohm
-Zl = 45.0  # line impedance for the port de-embed
+# ## Modal parameters -- NOT hand-copied; see below
+# CPW_mode_params.json is written by the SAME script that writes CPW_E.csv and
+# CPW_H.csv, on the SAME mesh (see the header).  Reading it instead of copying
+# numbers by hand is the whole point: a mode file and the constants that go with
+# it drift apart silently, and that drift is what cost this script two rounds of
+# debugging.  Regenerate all three together or none of them.
+with open('CPW_mode_params.json') as _fh:
+    _mp = json.load(_fh)
+assert abs(_mp['Line_W'] - Line_W) < 1e-9 and _mp['nz'] * _mp['nx'] > 0, \
+    'CPW_mode_params.json describes a different geometry than this script builds'
+beta_ref = _mp['beta']  # 1/m at f0, from the mode solver
+v_phase = _mp['v_phase']  # = 2*pi*f0/beta_ref
+Zw_mode = _mp['Zw']  # modal wave impedance, Ohm
+Zl = _mp['Zl']  # line impedance for the port de-embed
+fc_mode = _mp['f_cutoff']  # NEGATIVE here: quasi-TEM is the kc^2 < 0 branch
+print('mode file: %s, fc = %.4f GHz, beta = %.4f 1/m (n_eff %.4f), '
+      'Zw = %.2f Ohm, Zl = %.2f Ohm'
+      % (_mp['mode_type'], fc_mode / 1e9, beta_ref, C0 / v_phase, Zw_mode, Zl))
 
 # ## FDTD setup
-FDTD = openEMS(NrTS=300000, EndCriteria=1e-5)
+FDTD = openEMS(NrTS=int(os.environ.get('CPW_NRTS', '300000')), EndCriteria=1e-5)
 FDTD.SetGaussExcite(f0, fc_exc)
 # See note 3 in the header. Harmless when the waveform already integrates to
 # zero -- it reports the correction it applied, so the cost is never hidden.
@@ -253,8 +348,21 @@ mesh.AddLine('y', np.arange(0.0, substrate_length + dy / 2, dy).tolist())
 mesh.SmoothMeshLines('x', mesh_res, 1.4)
 mesh.SmoothMeshLines('z', mesh_res, 1.4)
 
-Yz = np.asarray(mesh.GetLines('y'))
+# np.unique, NOT GetLines() as it comes.  CSRectGrid::GetLines defaults to
+# do_sort=False and does not deduplicate, so it hands back the lines in
+# INSERTION order: here [0, 80] from SimBox, then the arange list which starts
+# with another 0.  Every index computed off that array was +2 from the mesh
+# openEMS actually builds, and ny counted the duplicate.  The other scripts in
+# this directory get away with it because SmoothMeshLines('all', ...) sorts
+# internally; this one deliberately skips smoothing y to keep it uniform, so y
+# was the one axis left unsorted.  That put the absorber 2 cells inside its
+# intended plane (SCALAR_INSET 4 -> an effective 2, one cell off the MUR stencil
+# it must not touch) and the excitation likewise.
+Yz = np.unique(np.asarray(mesh.GetLines('y')))
 ny = len(Yz)
+assert np.all(np.diff(Yz) > 0), 'y mesh lines are not strictly increasing'
+print('y mesh: %d lines, %.4f .. %.4f mm, dy = %.4f .. %.4f mm'
+      % (ny, Yz[0], Yz[-1], np.diff(Yz).min(), np.diff(Yz).max()))
 
 # Sheet planes, per method (note 2).
 SCALAR_INSET = 4
@@ -274,14 +382,19 @@ def sheet(idx, normal_positive):
     kw = dict(E_file="CPW_E.csv", normal_positive=normal_positive,
               phase_velocity=v_phase, priority=20)
     if MODE == 'MUR':
-        # Quasi-TEM is the kc -> 0 limit of a TM mode: fc = 0 leaves the
-        # evanescent branch inert and the filter becomes a pure delay.
-        kw.update(mode_type='TM', fc=0.0)
+        # Quasi-TEM declared as a TM mode with kc^2 < 0, which is what the
+        # solver actually returns for this line (fc = -2.222 GHz).  fc = 0
+        # would be the pure-delay limit and is NOT what this guide does.
+        kw.update(mode_type='TM', fc=fc_mode)
     else:
         kw.update(mode_type='TEM', H_file="CPW_H.csv", Zw=Zw_mode)
     return FDTD.AddModalAbsorber(start, stop, 'y', **kw)
 
 
+print('  absorber1 @ y[%d]=%.4f   port1 @ y[%d]=%.4f   '
+      'port2 @ y[%d]=%.4f   absorber2 @ y[%d]=%.4f'
+      % (idxAbs1, Yz[idxAbs1], idxPort1, Yz[idxPort1],
+         idxPort2, Yz[idxPort2], idxAbs2, Yz[idxAbs2]))
 abs1 = sheet(idxAbs1, True)
 
 port1 = FDTD.AddWaveGuidePort(1, [box_lo[0], Yz.item(idxPort1), box_lo[1]],
@@ -313,7 +426,7 @@ for n, idx in enumerate(fit_idx):
 y_fit_m = (Yz[fit_idx] - Yz.item(int(idxFit0))) * unit
 
 if DUMP_FIELDS:
-    Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
+    Et = CSX.AddDump('Et', file_type=int(os.environ.get('CPW_DUMP_TYPE', '0')), dump_type=0, dump_mode=1)
     Et.AddBox([SimBox[0], SimBox[2], SimBox[4]], [SimBox[1], SimBox[3], SimBox[5]])
 
 if display_structure:
