@@ -15,6 +15,7 @@
 *	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <cstdlib>
 #include "operator_ext_absorbing_bc.h"
 #include "engine_ext_absorbing_bc.h"
 #include "modal_mur_taps.h"
@@ -379,7 +380,14 @@ bool Operator_Ext_Absorbing_BC::BuildModalMur()
 	// at HIGHER index. Direction is encoded entirely by which plane is read and
 	// which is written -- there is no sign in the filter to get wrong.
 	const unsigned int deployPos = m_sheetX0[m_ny];
-	const int readShift = m_normalSignPositive ? +1 : -1;
+	int readCells = MODAL_MUR_READ_CELLS;
+	if (const char* rc = getenv("OPENEMS_MUR_READ_CELLS"))
+	{
+		readCells = atoi(rc);
+		if (readCells < 1)
+			readCells = 1;
+	}
+	const int readShift = (m_normalSignPositive ? +1 : -1) * readCells;
 	const long readPosL = (long)deployPos + readShift;
 
 	if ((readPosL < 0) || (readPosL >= (long)m_Op->GetNumberOfLines(m_ny, true)))

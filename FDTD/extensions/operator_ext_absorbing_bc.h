@@ -50,6 +50,22 @@
   0.49% band error and max|H| = 1.011, and S11 is essentially flat against
   tap count from 256 upward -- there is nothing here worth exposing.
   */
+// Distance, in cells, from the sheet to the Mur READ plane.
+//
+// The one-way condition's reflection goes as eps / (2 sin(beta*dz)), where eps
+// is the frequency-flat error in the one-cell propagation factor.  The
+// denominator -> 0 at DC, so a fixed eps is amplified without bound at the low
+// end of the band -- measured on the coax as |Gamma| ~ 1/f, flat to 3% over
+// 1.2-3.8 GHz.  Widening the stencil raises beta*dz proportionally and buys
+// ~6 dB per doubling at the low edge.
+//
+// It is not free: dz also lengthens the delay the tap filter must realise
+// (1/nu samples), and the filter's own in-band error grows with it.  Offline,
+// with 2048 taps on the coax: 1 cell -> filter floor -52 dB, 2 -> -42, 3 -> -38,
+// 4 -> -28, 6 -> -27.  Past ~4 cells the filter is the limit, not the
+// amplification.  OPENEMS_MUR_READ_CELLS overrides at runtime for sweeps.
+#define MODAL_MUR_READ_CELLS 1
+
 #define MODAL_MUR_NTAPS 512
 
 //! Hard ceiling for the adaptive tap growth (see MODAL_MUR_MAX_ABS_H).
