@@ -154,15 +154,26 @@ idxPort2 = len(Zz) - 1 - 12
 
 kc_TE10 = np.pi / (wg_a * unit)  # 1/m, for the dispersive port math
 
-# --- Absorber 1: terminates the low-z PEC face -------------------------------
+# --- Absorber sheets ---------------------------------------------------------
+#  Same interface as Coax_W_ModalMur.py and CPW_W_ModalAbsorb.py.
+#
+#  Unlike those two, this guide has a REAL cutoff, so fc is a genuine mode
+#  constant rather than the free-space-referencing artefact a TEM line reports.
+#  fc_abs is the DISCRETE TE10 cutoff (see above), and phase_velocity is left at
+#  its C0 default because the guide is air-filled: fc and v are then both
+#  referenced to free space, which is the consistency modal_mur_taps.cpp:62
+#  requires when it rebuilds kc = 2*pi*fc/v.
+#
 #  normal_positive=True: the guide lies at HIGHER index than the sheet, so the
-#  read plane is one cell in the +z direction.
-abs_z = Zz.item(idxAbs1)
-modal_mur_1 = FDTD.AddModalAbsorber([0.0, 0.0, abs_z], [wg_a, wg_b, abs_z], 'z',
-                                    E_file=E_mode_file,
-                                    mode_type='TE',      # -> dispersive Modal Mur
-                                    fc=fc_abs,
-                                    normal_positive=True)
+#  read plane is MODAL_MUR_READ_CELLS cells in the +z direction.
+def sheet(idx, normal_positive):
+    z = Zz.item(int(idx))
+    kw = dict(E_file=E_mode_file, normal_positive=normal_positive)
+    kw.update(mode_type='TE', fc=fc_abs)   # -> dispersive Modal Mur
+    return FDTD.AddModalAbsorber([0.0, 0.0, z], [wg_a, wg_b, z], 'z', **kw)
+
+
+modal_mur_1 = sheet(idxAbs1, True)
 
 # --- Port 1: waveguide port with excitation (mode files, TE -> excite_type 0) ---
 start = [0.0, 0.0, Zz.item(idxPort1 + 0)]
@@ -182,12 +193,7 @@ port2 = FDTD.AddWaveGuidePort(2, start, stop, 'z',
 
 # --- Absorber 2: terminates the high-z PEC face ------------------------------
 #  normal_positive=False: the guide lies at LOWER index, read plane is -z.
-abs_z = Zz.item(idxAbs2)
-modal_mur_2 = FDTD.AddModalAbsorber([0.0, 0.0, abs_z], [wg_a, wg_b, abs_z], 'z',
-                                    E_file=E_mode_file,
-                                    mode_type='TE',      # -> dispersive Modal Mur
-                                    fc=fc_abs,
-                                    normal_positive=False)
+modal_mur_2 = sheet(idxAbs2, False)
 
 # ## Modal-fit probe ladder ---------------------------------------------------
 #  Nine E-only mode-matched planes in the source-free stretch between the two

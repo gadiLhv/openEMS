@@ -132,6 +132,15 @@ teflon_epsR = 2.5
 Airbox_Add = 1.0  # transverse only -- NONE in z, that is the point
 unit = 1e-3
 
+# Modal Mur read-plane distance.  The one-way condition's reflection goes as
+# eps / (2 sin(beta*dz)) for a frequency-flat error eps, so widening the stencil
+# divides it down.  Measured here: 1 cell -> -14.18 dB, 2 cells -> -20.03 dB,
+# and 2 cells also converges faster and deeper (34241 steps to -87.49 dB against
+# 41654 to -65.31).  Only worth it for TEM/quasi-TEM: with a real cutoff the tap
+# filter's own error grows in step with dz and cancels the gain (RectWG loses
+# 6.3 dB at 2 cells, so it leaves this alone).
+os.environ.setdefault('OPENEMS_MUR_READ_CELLS', '2')
+
 Zw_TEM = 238.26517157  # coax modal impedance (as in Coax_W_WG_Ports)
 # EFFECTIVE INDEX -- measure it, do not assume it.
 #
@@ -154,8 +163,10 @@ f0, fc_exc = 1.55e9, 1.45e9
 f_mesh = 3.5e9
 
 # ## FDTD setup
-FDTD = openEMS(NrTS=300000, EndCriteria=1e-5, OverSampling=4)
+FDTD = openEMS(NrTS=300000, EndCriteria=1e-6, OverSampling=4)
 FDTD.SetGaussExcite(f0, fc_exc)
+FDTD.SetExciteZeroMean(True)
+
 if MODE == 'MUR':
     # PEC z faces: the Modal Mur sheets terminate them directly.
     FDTD.SetBoundaryCond(['MUR', 'MUR', 'MUR', 'MUR', 'PEC', 'PEC'])

@@ -220,6 +220,15 @@ from openEMS import utilities
 #   'SCALAR' -- Zw splitter, inset inside a MUR face (quasi-TEM: the natural one)
 #   'MUR'    -- Dispersive Modal Mur, on a PEC face, declared as the kc -> 0
 #               limit of a TM mode (fc = 0)
+# Modal Mur read-plane distance.  The one-way condition's reflection goes as
+# eps / (2 sin(beta*dz)) for a frequency-flat error eps, so widening the stencil
+# divides it down.  Measured here: 1 cell -> -14.18 dB, 2 cells -> -20.03 dB,
+# and 2 cells also converges faster and deeper (34241 steps to -87.49 dB against
+# 41654 to -65.31).  Only worth it for TEM/quasi-TEM: with a real cutoff the tap
+# filter's own error grows in step with dz and cancels the gain (RectWG loses
+# 6.3 dB at 2 cells, so it leaves this alone).
+os.environ.setdefault('OPENEMS_MUR_READ_CELLS', '2')
+
 MODE = os.environ.get('CPW_ABS_MODE', 'MUR')
 
 # Dump the whole box for inspection in ParaView. Large: budget a few hundred MB.
@@ -382,10 +391,29 @@ def sheet(idx, normal_positive):
     kw = dict(E_file="CPW_E.csv", normal_positive=normal_positive,
               phase_velocity=v_phase, priority=20)
     if MODE == 'MUR':
-        # Quasi-TEM declared as a TM mode with kc^2 < 0, which is what the
-        # solver actually returns for this line (fc = -2.222 GHz).  fc = 0
-        # would be the pure-delay limit and is NOT what this guide does.
-        kw.update(mode_type='TM', fc=fc_mode)
+        # TEM = the kc -> 0 limit of TM; phase_velocity carries the substrate.
+        # Same interface as Coax_W_ModalMur.py, and for the same reason.
+        #
+        # This USED to pass fc=fc_mode, the negative cutoff the mode solver
+        # reports (-2.2454 GHz), on the belief that a quasi-TEM line is not the
+        # pure-delay case.  That was wrong twice over.
+        #
+        # First, the negative fc is a REFERENCING artefact, not physics.
+        # blit_mode_solver forms kc^2 = k0^2 - beta^2 against FREE-SPACE k0
+        # (blit_mode_solver.py:933), so any line with n_eff > 1 gets kc^2 < 0
+        # by construction: |fc| = f0*sqrt(n_eff^2 - 1), verified exactly
+        # (2*sqrt(1.50347^2-1) = 2.24536 GHz).  Referenced to the MEDIUM
+        # instead, the coax equivalent comes out at -5.3e-06 against a k0^2*epsr
+        # of 11282 -- zero to nine digits.  The physical cutoff of a TEM line
+        # is 0.
+        #
+        # Second, fc and phase_velocity must share one reference.
+        # modal_mur_taps.cpp:62 rebuilds kc = 2*pi*fc/v, so blit's
+        # c0-referenced fc paired with v = v_phase gave
+        # beta(f0) = sqrt(63.02^2 + 70.75^2) = 94.75 against a true 63.02 --
+        # 50% off at the design frequency itself.  Almost certainly why MUR
+        # diverged here.
+        kw.update(mode_type='TM', fc=0.0)
     else:
         kw.update(mode_type='TEM', H_file="CPW_H.csv", Zw=Zw_mode)
     return FDTD.AddModalAbsorber(start, stop, 'y', **kw)
