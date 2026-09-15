@@ -586,7 +586,8 @@ class ModalAbsorber:
     ``mode_type='TE'`` or ``'TM'``: dispersive, with a real cutoff, so no
         scalar Zw can work near it. Resolves to the one-way "Dispersive Modal
         Mur" termination, which overwrites the modal component of the sheet
-        plane with the delayed amplitude one cell inside,
+        plane with the amplitude read ``read_cells`` cells inside, delayed by
+        the transit time between the two,
 
             a_sheet(w) = a_inside(w) * exp(-j*beta(w)*dz)
 
@@ -629,6 +630,14 @@ class ModalAbsorber:
         Wave speed of the guide's medium (m/s), default C0.  Dielectric-filled
         lines should set it -- C0/sqrt(eps_r) -- since for TE/TM it sets both
         the lattice dispersion and the cutoff conversion kc = 2*pi*fc/v.
+    read_cells : int
+        TE/TM only.  Cells between the sheet and the plane the modal amplitude
+        is read at, default 1.  The reflection goes as eps/(2 sin(beta*dz)) for
+        a frequency-flat error eps, so a wider stencil divides it down.  Worth
+        2 on TEM/quasi-TEM lines declared as fc=0 (coax: -14.2 -> -20.0 dB);
+        leave it at 1 for modes with a real cutoff (RectWG: -42.4 -> -36.1 dB
+        at 2).  The read plane must lie in clean guide, clear of ports and
+        other sheets.
     priority : int
         CSXCAD primitive priority.
     """
@@ -637,7 +646,8 @@ class ModalAbsorber:
 
     def __init__(self, CSX, start, stop, prop_dir, E_file, mode_type='TEM',
                  H_file=None, Zw=-1.0, fc=None,
-                 normal_positive=True, phase_velocity=None, priority=0):
+                 normal_positive=True, phase_velocity=None, read_cells=1,
+                 priority=0):
         from CSXCAD.CSProperties import ABCtype, ModeType
 
         mt = str(mode_type).upper()
@@ -655,6 +665,8 @@ class ModalAbsorber:
             if fc is None:
                 raise ValueError("ModalAbsorber: mode_type='%s' is dispersive and needs "
                                  "fc, the modal cutoff frequency in Hz" % mt)
+        if int(read_cells) < 1:
+            raise ValueError("ModalAbsorber: read_cells must be >= 1")
 
         self.CSX = CSX
         self.start = np.array(start, dtype=float)
@@ -665,6 +677,7 @@ class ModalAbsorber:
         self.mode_type = mt
         self.fc = fc
         self.normal_positive = normal_positive
+        self.read_cells = int(read_cells)
 
         prop_name = 'modal_absorber_{}'.format(id(self))
         kw = dict(
@@ -674,6 +687,7 @@ class ModalAbsorber:
             ModeType              = [ModeType.MODE_TEM,
                                      ModeType.MODE_TE,
                                      ModeType.MODE_TM][self._MODES[mt]],
+            MurReadCells          = self.read_cells,
         )
         if H_file is not None:
             kw['HModeFileName'] = H_file

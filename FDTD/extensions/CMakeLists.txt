@@ -28,7 +28,6 @@ set(SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/engine_ext_lumpedRLC.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/operator_ext_absorbing_bc.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/engine_ext_absorbing_bc.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/modal_mur_taps.cpp
   PARENT_SCOPE
 )
 

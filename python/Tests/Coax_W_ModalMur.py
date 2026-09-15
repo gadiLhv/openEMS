@@ -132,15 +132,6 @@ teflon_epsR = 2.5
 Airbox_Add = 1.0  # transverse only -- NONE in z, that is the point
 unit = 1e-3
 
-# Modal Mur read-plane distance.  The one-way condition's reflection goes as
-# eps / (2 sin(beta*dz)) for a frequency-flat error eps, so widening the stencil
-# divides it down.  Measured here: 1 cell -> -14.18 dB, 2 cells -> -20.03 dB,
-# and 2 cells also converges faster and deeper (34241 steps to -87.49 dB against
-# 41654 to -65.31).  Only worth it for TEM/quasi-TEM: with a real cutoff the tap
-# filter's own error grows in step with dz and cancels the gain (RectWG loses
-# 6.3 dB at 2 cells, so it leaves this alone).
-os.environ.setdefault('OPENEMS_MUR_READ_CELLS', '2')
-
 Zw_TEM = 238.26517157  # coax modal impedance (as in Coax_W_WG_Ports)
 # EFFECTIVE INDEX -- measure it, do not assume it.
 #
@@ -240,7 +231,9 @@ def sheet(idx, normal_positive):
     if MODE == 'MUR':
         # TEM = the kc -> 0 limit of TM. fc = 0 makes the tap generator collapse
         # to the pure per-cell delay; phase_velocity carries the dielectric.
-        kw.update(mode_type='TM', fc=0.0, phase_velocity=v_ph)
+        # read_cells=2: reading two cells in halves the low-frequency reflection
+        # (-14.18 -> -20.03 dB here) and converges faster. TEM only.
+        kw.update(mode_type='TM', fc=0.0, phase_velocity=v_ph, read_cells=2)
     else:
         kw.update(mode_type='TEM', H_file="Coax_Hr.csv", Zw=Zw_TEM)
     return FDTD.AddModalAbsorber(box_lo + [z], box_hi + [z], 'z', **kw)

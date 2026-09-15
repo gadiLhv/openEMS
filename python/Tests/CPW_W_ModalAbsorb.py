@@ -220,15 +220,6 @@ from openEMS import utilities
 #   'SCALAR' -- Zw splitter, inset inside a MUR face (quasi-TEM: the natural one)
 #   'MUR'    -- Dispersive Modal Mur, on a PEC face, declared as the kc -> 0
 #               limit of a TM mode (fc = 0)
-# Modal Mur read-plane distance.  The one-way condition's reflection goes as
-# eps / (2 sin(beta*dz)) for a frequency-flat error eps, so widening the stencil
-# divides it down.  Measured here: 1 cell -> -14.18 dB, 2 cells -> -20.03 dB,
-# and 2 cells also converges faster and deeper (34241 steps to -87.49 dB against
-# 41654 to -65.31).  Only worth it for TEM/quasi-TEM: with a real cutoff the tap
-# filter's own error grows in step with dz and cancels the gain (RectWG loses
-# 6.3 dB at 2 cells, so it leaves this alone).
-os.environ.setdefault('OPENEMS_MUR_READ_CELLS', '2')
-
 MODE = os.environ.get('CPW_ABS_MODE', 'MUR')
 
 # Dump the whole box for inspection in ParaView. Large: budget a few hundred MB.
@@ -413,7 +404,7 @@ def sheet(idx, normal_positive):
         # beta(f0) = sqrt(63.02^2 + 70.75^2) = 94.75 against a true 63.02 --
         # 50% off at the design frequency itself.  Almost certainly why MUR
         # diverged here.
-        kw.update(mode_type='TM', fc=0.0)
+        kw.update(mode_type='TM', fc=0.0, read_cells=2)
     else:
         kw.update(mode_type='TEM', H_file="CPW_H.csv", Zw=Zw_mode)
     return FDTD.AddModalAbsorber(start, stop, 'y', **kw)

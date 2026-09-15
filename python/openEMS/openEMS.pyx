@@ -342,8 +342,9 @@ cdef class openEMS:
         
     def AddModalAbsorber(self, start, stop, p_dir, E_file, mode_type='TEM',
                          H_file=None, Zw=-1.0, fc=None,
-                         normal_positive=True, phase_velocity=None, priority=0):
-        """ AddModalAbsorber(start, stop, p_dir, E_file, mode_type='TEM', H_file=None, Zw=-1.0, fc=None, normal_positive=True, phase_velocity=None, priority=0)
+                         normal_positive=True, phase_velocity=None, read_cells=1,
+                         priority=0):
+        """ AddModalAbsorber(start, stop, p_dir, E_file, mode_type='TEM', H_file=None, Zw=-1.0, fc=None, normal_positive=True, phase_velocity=None, read_cells=1, priority=0)
 
         Add a modal absorbing boundary condition sheet for a single guided mode.
 
@@ -383,6 +384,10 @@ cdef class openEMS:
         phase_velocity : float, optional
             Wave speed of the guide's medium (m/s), default C0.  Dielectric-
             filled lines should set it (C0/sqrt(eps_r)).
+        read_cells : int
+            TE/TM only. Cells between the sheet and the Modal Mur read plane,
+            default 1. 2 helps TEM/quasi-TEM lines declared as fc=0; keep 1 for
+            modes with a real cutoff. See openEMS.ports.ModalAbsorber.
         priority : int
             CSXCAD primitive priority.
 
@@ -399,6 +404,7 @@ cdef class openEMS:
                                    fc=fc,
                                    normal_positive=normal_positive,
                                    phase_velocity=phase_velocity,
+                                   read_cells=read_cells,
                                    priority=priority)
 
     def AddWaveGuidePort(self, port_nr, start, stop, p_dir, E_func = None, H_func = None, kc = 0.0, excite = 0, excite_type = 0, E_file = None, H_file = None, **kw):

@@ -15,10 +15,9 @@
 *	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <cstdlib>
 #include "operator_ext_absorbing_bc.h"
 #include "engine_ext_absorbing_bc.h"
-#include "modal_mur_taps.h"
+#include "tools/modal_mur_taps.h"
 
 #include "tools/array_ops.h"
 #include "tools/global.h"
@@ -68,6 +67,7 @@ void Operator_Ext_Absorbing_BC::Initialize()
 
 	m_CutOffFrequency = 0.0;
 	m_CutOffFrequencySet = false;
+	m_MurReadCells = 1;
 	m_MurReadPos = 0;
 	m_MurDz = 0.0;
 	m_MurTaps.clear();
@@ -158,6 +158,7 @@ bool Operator_Ext_Absorbing_BC::SetInitParams(CSPrimitives* prim, CSPropAbsorbin
 	m_Zw = abc_prop->GetWaveImpedance();
 	m_CutOffFrequency = abc_prop->GetCutOffFrequency();
 	m_CutOffFrequencySet = abc_prop->IsCutOffFrequencySet();
+	m_MurReadCells = abc_prop->GetMurReadCells();
 
 	// ---- resolve the method from the declared mode -------------------------
 	//  The caller states the PHYSICS; the solver picks the machinery, because
@@ -373,27 +374,24 @@ bool Operator_Ext_Absorbing_BC::BuildModalMur()
 	// The sheet plane is where the delayed amplitude is WRITTEN; in the
 	// intended setup it is the face of a PEC block, so the E update re-zeroes
 	// it every step and the write is a clean slate rather than an accumulation.
-	// The READ plane is one cell into the guide.
+	// The READ plane is m_MurReadCells cells into the guide (CSPropAbsorbingBC's
+	// MurReadCells, default 1). The reflection goes as eps/(2 sin(beta*dz)) for a
+	// frequency-flat error eps, so a wider stencil divides it down: worthwhile on
+	// TEM/quasi-TEM lines, not with a real cutoff, where the tap filter's own
+	// error grows with dz and cancels the gain.
 	//
 	// The shift follows the same convention the Mur path uses for its interior
 	// neighbour (m_pos_ny0_shift_V): normalSignPositive means the interior lies
 	// at HIGHER index. Direction is encoded entirely by which plane is read and
 	// which is written -- there is no sign in the filter to get wrong.
 	const unsigned int deployPos = m_sheetX0[m_ny];
-	int readCells = MODAL_MUR_READ_CELLS;
-	if (const char* rc = getenv("OPENEMS_MUR_READ_CELLS"))
-	{
-		readCells = atoi(rc);
-		if (readCells < 1)
-			readCells = 1;
-	}
-	const int readShift = (m_normalSignPositive ? +1 : -1) * readCells;
+	const int readShift = (m_normalSignPositive ? +1 : -1) * (int)m_MurReadCells;
 	const long readPosL = (long)deployPos + readShift;
 
 	if ((readPosL < 0) || (readPosL >= (long)m_Op->GetNumberOfLines(m_ny, true)))
 	{
 		cerr << "Operator_Ext_Absorbing_BC::BuildModalMur(): Error: read plane falls outside the mesh."
-		        " The absorber sheet needs at least one cell of guide on its inner side." << endl;
+		        " The absorber sheet needs " << m_MurReadCells << " cell(s) of guide on its inner side." << endl;
 		return false;
 	}
 	m_MurReadPos = (unsigned int)readPosL;
@@ -597,63 +595,38 @@ void Operator_Ext_Absorbing_BC::BuildModalDeployTemplates()
 	double oP  = m_dSheetStart[m_nyP];
 	double oPP = m_dSheetStart[m_nyPP];
 
-	// SAMPLING CONVENTION. Two defensible choices, and they are not
-	// interchangeable:
+	// SAMPLING CONVENTION: both components at the primal node, exactly what
+	// ProcessModeMatch does. The measurement is
+	// (node-interpolated E) . (node-sampled template), so a deployment built the
+	// same way is the ADJOINT of the measurement: subtracting 'a' times it is a
+	// true projection, and what is removed is exactly what was measured.
 	//
-	//  node (default) -- sample both components at the primal node, exactly
-	//      what ProcessModeMatch does. The measurement is
-	//      (node-interpolated E) . (node-sampled template), so a deployment
-	//      built the same way is the ADJOINT of the measurement: subtracting
-	//      'a' times it is a true projection, and what is removed is exactly
-	//      what was measured.
-	//
-	//  Yee (OPENEMS_ABC_DEPLOY_YEE=1) -- sample each component at its own
-	//      edge centre, which is where V/dl physically lives. More accurate in
-	//      isolation, but it no longer matches the measurement basis, so the
-	//      subtraction stops being a projection and leaves a residue that
-	//      grows with how fast the mode varies per cell. On the coax (five
-	//      lines across the centre wire, 1/r mode) that residue cost 7 dB of
-	//      through-transmission; on a well-resolved rect TE10 it is harmless.
-	//
-	// Fix the basis mismatch properly and Yee sampling becomes the better
-	// choice; until then, match the measurement.
-	static const bool deployYee = (getenv("OPENEMS_ABC_DEPLOY_YEE") != NULL);
-
+	// Sampling each component at its own edge centre instead -- where V/dl
+	// physically lives -- was tried and dropped: it no longer matches the
+	// measurement basis, so the subtraction stops being a projection. On the
+	// coax (five lines across the centre wire, 1/r mode) that residue cost 7 dB
+	// of through-transmission.
 	double vP, vPP;
 	for (unsigned int i = 0; i < P; ++i)
 	{
 		double xp = m_Op->GetDiscLine(m_nyP, m_sheetX0[m_nyP] + i, false) - oP;	// primal
-		double xd = (i < P - 1) ? m_Op->GetDiscLine(m_nyP, m_sheetX0[m_nyP] + i, true) - oP : xp;	// dual
-		if (!deployYee) xd = xp;
 		for (unsigned int j = 0; j < PP; ++j)
 		{
 			double yp = m_Op->GetDiscLine(m_nyPP, m_sheetX0[m_nyPP] + j, false) - oPP;
-			double yd = (j < PP - 1) ? m_Op->GetDiscLine(m_nyPP, m_sheetX0[m_nyPP] + j, true) - oPP : yp;
-			if (!deployYee) yd = yp;
 
-			// E edge along nyP at (dual_nyP, prim_nyPP)
+			double eP, ePP, hP, hPP;
+			eFile.LinInterp2(xp, yp, eP, ePP);
+			hFile.LinInterp2(xp, yp, hP, hPP);
+
 			if (i < P - 1)
 			{
-				eFile.LinInterp2(xd, yp, vP, vPP);
-				m_dE_nyP(i, j) = vP;
+				m_dE_nyP(i, j)  = eP;	// E edge along nyP
+				m_dH_nyPP(i, j) = hPP;	// I edge along nyPP
 			}
-			// E edge along nyPP at (prim_nyP, dual_nyPP)
 			if (j < PP - 1)
 			{
-				eFile.LinInterp2(xp, yd, vP, vPP);
-				m_dE_nyPP(i, j) = vPP;
-			}
-			// I edge along nyP at (prim_nyP, dual_nyPP)
-			if (j < PP - 1)
-			{
-				hFile.LinInterp2(xp, yd, vP, vPP);
-				m_dH_nyP(i, j) = vP;
-			}
-			// I edge along nyPP at (dual_nyP, prim_nyPP)
-			if (i < P - 1)
-			{
-				hFile.LinInterp2(xd, yp, vP, vPP);
-				m_dH_nyPP(i, j) = vPP;
+				m_dE_nyPP(i, j) = ePP;	// E edge along nyPP
+				m_dH_nyP(i, j)  = hP;	// I edge along nyP
 			}
 		}
 	}

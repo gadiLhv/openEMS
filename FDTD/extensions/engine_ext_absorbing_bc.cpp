@@ -167,10 +167,11 @@ void Engine_Ext_Absorbing_BC::DoPreVoltageUpdatesImpl(EngType* eng, int threadID
 		// NOTE: this sign and dH_factor below form a pair -- always flip together.
 		double a = 0.5 * (Emm - m_normalSign * m_Zw * Hmm);
 
-		// Diagnostic aid: measure-only mode. The PMMs keep recording (dumps stay
-		// valid) but the absorber applies no correction, so the undisturbed field
-		// can be compared against the mode templates. Enable by setting the
-		// environment variable OPENEMS_ABC_MEASURE_ONLY.
+		// DEBUG SWITCH -- not a user feature, and deliberately kept out of the
+		// Python/CSXCAD interface. With OPENEMS_ABC_MEASURE_ONLY set, the PMMs keep
+		// recording (dumps stay valid) but the absorber applies no correction, so
+		// the undisturbed field can be compared against the mode templates. For an
+		// absorber A/B, run with no sheet at all instead.
 		static const bool measure_only = (getenv("OPENEMS_ABC_MEASURE_ONLY") != NULL);
 		if (measure_only)
 			return;
