@@ -120,7 +120,7 @@ if not os.path.exists(Sim_Path):
 shutil.copy("Coax_Er.csv", Sim_Path)
 shutil.copy("Coax_Hr.csv", Sim_Path)
 
-post_proc_only = False
+post_proc_only = True
 display_structure = False
 
 # ## Geometry (drawing units = mm)
@@ -368,3 +368,12 @@ axhline(np.sqrt(teflon_epsR), color='r', linestyle='--', label=r'$\sqrt{\epsilon
 grid(); legend(); ylabel('effective index'); xlabel('Frequency (GHz)')
 title('How far the staircased mesh moves the line off its ideal index')
 show()
+
+print('\n=== full requested band, 0.1 - 3.0 GHz ===')
+print('  f[GHz]   |Gam| dB   n_eff    resid    port|S11|   |S21| dB')
+for fi in [0.10, 0.25, 0.50, 0.75, 1.00, 1.50, 2.00, 2.50, 3.00]:
+    j = np.abs(f - fi * 1e9).argmin()
+    print('  %6.2f   %8.2f   %.4f  %7.4f   %8.2f   %8.2f'
+          % (f[j] / 1e9, Gam_dB[j], n_eff[j], res[j], s11_dB[j], s21_dB[j]))
+jw = int(np.argmax(Gam_dB))
+print('  worst in band: %.2f dB at %.2f GHz (resid %.4f)' % (Gam_dB[jw], f[jw] / 1e9, res[jw]))

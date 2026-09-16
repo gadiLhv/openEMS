@@ -221,15 +221,28 @@ from openEMS import utilities
 #   'MUR'    -- Dispersive Modal Mur, on a PEC face, declared as the kc -> 0
 #               limit of a TM mode (fc = 0)
 MODE = os.environ.get('CPW_ABS_MODE', 'MUR')
+# MODE = os.environ.get('CPW_ABS_MODE', 'SCALAR')
 
 # Dump the whole box for inspection in ParaView. Large: budget a few hundred MB.
-DUMP_FIELDS = bool(int(os.environ.get('CPW_DUMP_FIELDS', '1')))
+DUMP_FIELDS = bool(int(os.environ.get('CPW_DUMP_FIELDS', '0')))
 
 Sim_Path = os.path.join(tempfile.gettempdir(), 'Test_CPW_ModalAbsorb_' + MODE)
 if not os.path.exists(Sim_Path):
     os.mkdir(Sim_Path)
-shutil.copy("CPW_E.csv", Sim_Path)
-shutil.copy("CPW_H.csv", Sim_Path)
+# Mode files. Copied into the sim folder under the fixed names every consumer
+# below uses, so a different pair (e.g. CPW_E_sim.csv / CPW_H_sim.csv from
+# CPW_Learn_Mode.py) can be swapped in without touching anything else.
+E_MODE_SRC = os.environ.get('CPW_E_FILE', 'CPW_E.csv')
+H_MODE_SRC = os.environ.get('CPW_H_FILE', 'CPW_H.csv')
+shutil.copy(E_MODE_SRC, os.path.join(Sim_Path, 'CPW_E.csv'))
+shutil.copy(H_MODE_SRC, os.path.join(Sim_Path, 'CPW_H.csv'))
+
+# E_MODE_SRC = os.environ.get('CPW_E_FILE', 'CPW_E_sim.csv')
+# H_MODE_SRC = os.environ.get('CPW_H_FILE', 'CPW_H_sim.csv')
+# shutil.copy(E_MODE_SRC, os.path.join(Sim_Path, 'CPW_E_sim.csv'))
+# shutil.copy(H_MODE_SRC, os.path.join(Sim_Path, 'CPW_H_sim.csv'))
+
+print('mode files: E <- %s, H <- %s' % (E_MODE_SRC, H_MODE_SRC))
 
 post_proc_only = False
 display_structure = False
@@ -254,7 +267,8 @@ port_h_fact = 3.5
 Airbox_Add = 12.5
 unit = 1e-3
 
-f0, fc_exc = 2e9, 1e9
+# f0, fc_exc = 1.55e9, 1.45e9
+f0, fc_exc = 5e9, 1e9
 
 # ## Modal parameters -- NOT hand-copied; see below
 # CPW_mode_params.json is written by the SAME script that writes CPW_E.csv and
@@ -282,12 +296,14 @@ FDTD.SetGaussExcite(f0, fc_exc)
 # zero -- it reports the correction it applied, so the cost is never hidden.
 FDTD.SetExciteZeroMean(True)
 
-if MODE == 'MUR':
-    # PEC on the propagation faces so the one-way sheets terminate them.
-    FDTD.SetBoundaryCond(['MUR', 'MUR', 'PEC', 'PEC', 'MUR', 'MUR'])
-else:
-    # The splitter needs a live E at its plane, so no PEC there.
-    FDTD.SetBoundaryCond(['MUR', 'MUR', 'MUR', 'MUR', 'MUR', 'MUR'])
+# if MODE == 'MUR':
+#     # PEC on the propagation faces so the one-way sheets terminate them.
+#     FDTD.SetBoundaryCond(['MUR', 'MUR', 'PEC', 'PEC', 'MUR', 'MUR'])
+# else:
+#     # The splitter needs a live E at its plane, so no PEC there.
+#     FDTD.SetBoundaryCond(['MUR', 'MUR', 'MUR', 'MUR', 'MUR', 'MUR'])
+
+FDTD.SetBoundaryCond(['PEC', 'PEC', 'PEC', 'PEC', 'MUR', 'MUR'])
 
 CSX = ContinuousStructure()
 FDTD.SetCSX(CSX)
@@ -296,8 +312,14 @@ mesh.SetDeltaUnit(unit)
 mesh_res = ((C0 / (f0 + fc_exc)) / unit) / 50
 
 # y is EXACTLY the structure: no air beyond either end (note 1).
+# SimBox = np.array([
+#     -substrate_width * 0.5 - Airbox_Add, substrate_width * 0.5 + Airbox_Add,
+#     0.0, substrate_length,
+#     -substrate_thickness * (port_h_fact - 1.0) - Airbox_Add,
+#      substrate_thickness * (1.0 + port_h_fact) + Airbox_Add])
+
 SimBox = np.array([
-    -substrate_width * 0.5 - Airbox_Add, substrate_width * 0.5 + Airbox_Add,
+    -substrate_width * 0.5, substrate_width * 0.5,
     0.0, substrate_length,
     -substrate_thickness * (port_h_fact - 1.0) - Airbox_Add,
      substrate_thickness * (1.0 + port_h_fact) + Airbox_Add])
@@ -368,8 +390,15 @@ print('y mesh: %d lines, %.4f .. %.4f mm, dy = %.4f .. %.4f mm'
 SCALAR_INSET = 4
 idxAbs1 = 0 if MODE == 'MUR' else SCALAR_INSET
 idxAbs2 = (ny - 1) if MODE == 'MUR' else (ny - 1 - SCALAR_INSET)
-idxPort1 = idxAbs1 + 6
-idxPort2 = idxAbs2 - 6
+# Cells from each absorber sheet to its port's excitation/measurement plane.
+# The soft source carries a non-propagating near-field that is gone within
+# ~2 cells (modal purity 0.00 on the source plane, >= 0.97 three cells out), so
+# the port must not land on anything the absorber reads:
+#   MUR    -- sheet at y[0], read plane read_cells=2 further in: gap >= 3.
+#   SCALAR -- the splitter reads H on the planes bracketing its sheet: gap >= 2.
+PORT_GAP = int(os.environ.get('CPW_PORT_GAP', '6'))
+idxPort1 = idxAbs1 + PORT_GAP
+idxPort2 = idxAbs2 - PORT_GAP
 
 box_lo = [-p_x, p_z0]
 box_hi = [p_x, p_z1]
@@ -379,7 +408,7 @@ def sheet(idx, normal_positive):
     y = Yz.item(int(idx))
     start = [box_lo[0], y, box_lo[1]]
     stop = [box_hi[0], y, box_hi[1]]
-    kw = dict(E_file="CPW_E.csv", normal_positive=normal_positive,
+    kw = dict(E_file=E_MODE_SRC, normal_positive=normal_positive,
               phase_velocity=v_phase, priority=20)
     if MODE == 'MUR':
         # TEM = the kc -> 0 limit of TM; phase_velocity carries the substrate.
@@ -406,7 +435,7 @@ def sheet(idx, normal_positive):
         # diverged here.
         kw.update(mode_type='TM', fc=0.0, read_cells=2)
     else:
-        kw.update(mode_type='TEM', H_file="CPW_H.csv", Zw=Zw_mode)
+        kw.update(mode_type='TEM', H_file=H_MODE_SRC, Zw=Zw_mode)
     return FDTD.AddModalAbsorber(start, stop, 'y', **kw)
 
 
@@ -414,18 +443,24 @@ print('  absorber1 @ y[%d]=%.4f   port1 @ y[%d]=%.4f   '
       'port2 @ y[%d]=%.4f   absorber2 @ y[%d]=%.4f'
       % (idxAbs1, Yz[idxAbs1], idxPort1, Yz[idxPort1],
          idxPort2, Yz[idxPort2], idxAbs2, Yz[idxAbs2]))
-abs1 = sheet(idxAbs1, True)
+# The control that keeps every other A/B honest: same mesh, same ports, same
+# boundaries, no absorber sheets at all. Whatever |Gamma| this reports is what
+# the SURROUNDINGS achieve on their own, and no sheet result means anything
+# until it is compared against it.
+NO_SHEETS = bool(int(os.environ.get('CPW_NO_SHEETS', '0')))
+
+abs1 = None if NO_SHEETS else sheet(idxAbs1, True)
 
 port1 = FDTD.AddWaveGuidePort(1, [box_lo[0], Yz.item(idxPort1), box_lo[1]],
                               [box_hi[0], Yz.item(idxPort1 + 1), box_hi[1]], 'y',
-                              E_file="CPW_E.csv", H_file="CPW_H.csv",
+                              E_file=E_MODE_SRC, H_file=H_MODE_SRC,
                               kc=0.0, excite=1, excite_type=0)
 port2 = FDTD.AddWaveGuidePort(2, [box_lo[0], Yz.item(idxPort2), box_lo[1]],
                               [box_hi[0], Yz.item(idxPort2 - 1), box_hi[1]], 'y',
-                              E_file="CPW_E.csv", H_file="CPW_H.csv",
+                              E_file=E_MODE_SRC, H_file=H_MODE_SRC,
                               kc=0.0, excite=0, excite_type=0)
 
-abs2 = sheet(idxAbs2, False)
+abs2 = None if NO_SHEETS else sheet(idxAbs2, False)
 
 # ## E-only modal fit ladder (note 4)
 #  Fibonacci offsets: a two-plane split is blind wherever beta*d = n*pi, and no
@@ -439,7 +474,7 @@ fit_files = []
 for n, idx in enumerate(fit_idx):
     yf = Yz.item(int(idx))
     fn = 'mfit_ut_{:02d}'.format(n)
-    p = CSX.AddProbe(fn, p_type=10, mode_file_name="CPW_E.csv")
+    p = CSX.AddProbe(fn, p_type=10, mode_file_name=E_MODE_SRC)
     p.AddBox([box_lo[0], yf, box_lo[1]], [box_hi[0], yf, box_hi[1]])
     fit_files.append(fn)
 y_fit_m = (Yz[fit_idx] - Yz.item(int(idxFit0))) * unit
@@ -458,7 +493,7 @@ if not post_proc_only:
     FDTD.Run(Sim_Path, verbose=3, cleanup=False)
 
 # ## Post-processing
-f = np.linspace(1.0e9, 3.0e9, 201)
+f = np.linspace(f0 - fc_exc, f0 + fc_exc, 201)
 
 
 def modal_split(z_off_m, Uf_row, gam):

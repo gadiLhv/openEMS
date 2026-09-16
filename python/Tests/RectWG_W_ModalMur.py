@@ -96,7 +96,7 @@ dz = 8.0
 if DC_HEAVY:
     f0, fc = 1.55e9, 1.45e9     # reaches ~0.1 GHz: a decade below cutoff
 else:
-    f0, fc = 2.10e9, 0.80e9     # band 1.30 - 2.90 GHz, entirely above cutoff
+    f0, fc = 2.25e9, 0.75e9     # band 1.50 - 3.00 GHz, entirely above cutoff
 
 # ## Cutoff frequency handed to the absorber
 #  The absorber builds beta from the DISCRETE lattice dispersion relation, so
@@ -142,9 +142,15 @@ mesh.AddLine('z', np.arange(0.0, wg_L + dz / 2, dz).tolist())
 
 Zz = mesh.GetLines('z')
 
+# 'MUR' (Modal Mur, on the PEC end face) or 'SCALAR' (Zw splitter, inset).
+MODE = os.environ.get('RECT_ABS_MODE', 'MUR')
+
 # Absorbers ON the PEC end faces -- the first and last z planes. No pocket.
-idxAbs1 = 0
-idxAbs2 = len(Zz) - 1
+# The scalar splitter cannot sit on PEC (it needs a live E at its own plane),
+# so it goes SCALAR_INSET cells inside, with the PEC face behind it.
+SCALAR_INSET = 4
+idxAbs1 = 0 if MODE == 'MUR' else SCALAR_INSET
+idxAbs2 = (len(Zz) - 1) if MODE == 'MUR' else (len(Zz) - 1 - SCALAR_INSET)
 
 # Ports well clear of both the sheets and each other. A port sitting in a
 # sheet's near field measures the sheet, not a travelling wave, and the
@@ -166,10 +172,20 @@ kc_TE10 = np.pi / (wg_a * unit)  # 1/m, for the dispersive port math
 #
 #  normal_positive=True: the guide lies at HIGHER index than the sheet, so the
 #  read plane is MODAL_MUR_READ_CELLS cells in the +z direction.
+#  MODE='SCALAR' runs the scalar Zw splitter instead, for comparison. It is
+#  knowingly the wrong tool here: TE10's wave impedance eta0/sqrt(1-(fc/f)^2)
+#  runs from 628 Ohm at 1.5 GHz to 411 Ohm at 3.0 GHz, and a scalar absorber can
+#  only be handed one number. Zw_TE10 below is the band-centre value.
+Zw_TE10 = 376.730313461 / np.sqrt(1.0 - (fc_abs / f0) ** 2)
+
+
 def sheet(idx, normal_positive):
     z = Zz.item(int(idx))
     kw = dict(E_file=E_mode_file, normal_positive=normal_positive)
-    kw.update(mode_type='TE', fc=fc_abs)   # -> dispersive Modal Mur
+    if MODE == 'MUR':
+        kw.update(mode_type='TE', fc=fc_abs)   # -> dispersive Modal Mur
+    else:
+        kw.update(mode_type='TEM', H_file=H_mode_file, Zw=Zw_TE10)
     return FDTD.AddModalAbsorber([0.0, 0.0, z], [wg_a, wg_b, z], 'z', **kw)
 
 
