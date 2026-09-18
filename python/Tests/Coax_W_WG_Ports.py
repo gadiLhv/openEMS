@@ -58,7 +58,8 @@ fc = 1e9  # 20 dB corner frequency
 # # * Define a reduced end criteria of -40dB
 FDTD = openEMS(NrTS=300000, EndCriteria=1e-4)
 FDTD.SetGaussExcite(f0, fc)
-FDTD.SetBoundaryCond(['MUR', 'MUR', 'MUR', 'MUR', 'MUR', 'MUR'])
+FDTD.SetExciteZeroMean(True)  # zero time-integral: the pulse leaves no static charge at the port
+FDTD.SetBoundaryCond(['MUR', 'MUR', 'MUR', 'MUR', 'PEC', 'PEC'])
 # FDTD.SetBoundaryCond( ['PML_8', 'PML_8', 'PML_8', 'PML_8', 'PML_8', 'PML_8'] )
 
 CSX = ContinuousStructure()
@@ -139,10 +140,10 @@ stop = [coax_D * 0.5 + coax_shield_thick, coax_D * 0.5 + coax_shield_thick, Zz.i
 port2 = FDTD.AddWaveGuidePort(2, start, stop, 'z', E_file="Coax_Er.csv", H_file="Coax_Hr.csv", kc=0.0, excite=0, excite_type=0)
 
 # Define dump box...
-# Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
-# start = [float(SimBox[0]), float(SimBox[2]), float(SimBox[4])];
-# stop  = [float(SimBox[1]), float(SimBox[3]), float(SimBox[5])];
-# Et.AddBox(start, stop);
+Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
+start = [float(SimBox[0]), float(SimBox[2]), float(SimBox[4])];
+stop = [float(SimBox[1]), float(SimBox[3]), float(SimBox[5])];
+Et.AddBox(start, stop);
 
 # ## Run the simulation
 if 1:  # debugging only
