@@ -34,6 +34,7 @@
 #include "FDTD/extensions/operator_ext_conductingsheet.h"
 #include "FDTD/extensions/operator_ext_steadystate.h"
 #include "FDTD/extensions/operator_ext_absorbing_bc.h"
+#include "FDTD/extensions/operator_ext_invisible_pml.h"
 #include "FDTD/extensions/engine_ext_steadystate.h"
 #include "FDTD/engine_interface_fdtd.h"
 #include "FDTD/engine_interface_cylindrical_fdtd.h"
@@ -429,10 +430,25 @@ void openEMS::SetupAbsorbingSheets()
 		for (size_t sheetIdx = 0 ; sheetIdx < cs_abc_prims.size() ; ++sheetIdx)
 		{
 
+			CSPrimitives* cPrimitive = cs_abc_prims.at(sheetIdx);
+
+			// The PML types live in their own extension
+			CSPropAbsorbingBC::ABCtype abcType = cABCprops->GetAbsorbingBoundaryType();
+			if ((abcType == CSPropAbsorbingBC::PML_8) || (abcType == CSPropAbsorbingBC::PML_16) || (abcType == CSPropAbsorbingBC::PML_32))
+			{
+				Operator_Ext_InvisiblePML* op_ext_pml = new Operator_Ext_InvisiblePML(FDTD_Op);
+				if (op_ext_pml->SetInitParams(cPrimitive,cABCprops))
+					FDTD_Op->AddExtension(op_ext_pml);
+				else
+				{
+					cerr << "openEMS::SetupAbsorbingSheets(): Warning: Invisible PML sheet #" << sheetIdx << " setup failed.";
+					delete op_ext_pml;
+				}
+				continue;
+			}
+
 			// Attempt to initialize operator extension
 			Operator_Ext_Absorbing_BC* op_ext_abc = new Operator_Ext_Absorbing_BC(FDTD_Op);
-
-			CSPrimitives* cPrimitive = cs_abc_prims.at(sheetIdx);
 
 			// Initialize all necessary parameters so the extension operator can be
 			// built later on.
