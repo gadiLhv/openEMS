@@ -112,8 +112,25 @@ class Port(object):
             self.it_tot += self.i_data.ui_val[n]
 
 
-    def CalcPort(self, sim_path, freq, ref_impedance=None, ref_plane_shift=None, signal_type='pulse'):
+    def CalcPort(self, sim_path, freq, ref_impedance=None, ref_plane_shift=None, signal_type='pulse', C_excess=None):
+        """Calculate the port voltages, currents and waves at the frequencies freq.
+
+        C_excess : float, optional
+            Excess capacitance (F) in series with the measured voltage. The part
+            of the injected field that is not the mode stays near the source as
+            an evanescent, mostly electric near field; measured a cell or two
+            from the source it adds I/(j*w*C_excess) to the voltage, which pulls
+            U/I below the line impedance at low frequency. It is a property of
+            the port (template, mesh, measurement distance), not of the DUT, so
+            it can be fitted once on a matched line and reused. It exists only
+            at the EXCITED port -- a passive port has no source near its
+            measurement plane -- so pass it for the excited port only. None: no
+            correction.
+        """
         self.ReadUIData(sim_path, freq, signal_type)
+
+        if C_excess:
+            self.uf_tot = self.uf_tot - self.if_tot / (1j * 2 * np.pi * np.asarray(freq) * C_excess)
 
         if ref_impedance is not None:
             self.Z_ref = ref_impedance
@@ -201,12 +218,12 @@ class LumpedPort(Port):
         i_probe.AddBox(i_start, i_stop)
         self.port_props.append(i_probe)
 
-    def CalcPort(self, sim_path, freq, ref_impedance=None, ref_plane_shift=None, signal_type='pulse'):
+    def CalcPort(self, sim_path, freq, ref_impedance=None, ref_plane_shift=None, signal_type='pulse', C_excess=None):
         if ref_impedance is None:
             self.Z_ref = self.R
         if ref_plane_shift is not None:
             Warning('A lumped port does not support a reference plane shift! Ignoring...')
-        super(LumpedPort, self).CalcPort(sim_path, freq, ref_impedance, ref_plane_shift, signal_type)
+        super(LumpedPort, self).CalcPort(sim_path, freq, ref_impedance, ref_plane_shift, signal_type, C_excess=C_excess)
 
 class MSLPort(Port):
     """
@@ -347,7 +364,14 @@ class WaveguidePort(Port):
     Port, RectWGPort
 
     """
-    def __init__(self, CSX, port_nr, start, stop, exc_dir, E_WG_func, H_WG_func, kc, excite = 0, excite_type = 0, E_WG_file = None, H_WG_file = None, **kw):
+    def __init__(self, CSX, port_nr, start, stop, exc_dir, E_WG_func, H_WG_func, kc, excite = 0, excite_type = 0, E_WG_file = None, H_WG_file = None, mode_type = 'TEM', **kw):
+        """
+        mode_type : 'TEM' (default), 'TE' or 'TM' -- selects the wave impedance
+            used as the port's reference impedance, see CalcPort.
+        """
+        self.mode_type = str(mode_type).upper()
+        if self.mode_type not in ('TEM', 'TE', 'TM'):
+            raise Exception("mode_type must be 'TEM', 'TE' or 'TM', got '{}'".format(mode_type))
         
         super(WaveguidePort, self).__init__(CSX, port_nr=port_nr, start=start, stop=stop, excite=excite, excite_type=excite_type, **kw)
         self.exc_ny  = CheckNyDir(exc_dir)
@@ -457,16 +481,28 @@ class WaveguidePort(Port):
         i_probe.AddBox(m_start, m_stop)
         self.port_props.append(i_probe)
         
-    def CalcPort(self, sim_path, freq, ref_impedance=None, ref_plane_shift=None, signal_type='pulse', ZL = -1):
-        k = 2.0*np.pi*freq/C0*self.ref_index
-        self.beta = np.sqrt(k**2 - self.kc**2)
+    def CalcPort(self, sim_path, freq, ref_impedance=None, ref_plane_shift=None, signal_type='pulse', ZL = -1, C_excess=None):
+        k0 = 2.0*np.pi*np.asarray(freq)/C0
+        k = k0*self.ref_index
+        # complex propagation constant; below cut-off take the decaying branch
+        # beta = -j*alpha (fields ~ exp(-j*beta*z) = exp(-alpha*z)), so the port
+        # impedance and the waves stay defined through cut-off
+        self.beta = np.conj(np.sqrt(k**2 - self.kc**2 + 0j))
+        self.beta = np.where(self.beta == 0, 1e-12, self.beta)   # exactly at cut-off
         if ZL <= 0:
-            self.ZL = k * Z0 / self.beta    #analytic waveguide impedance
+            # analytic wave impedance of the port mode:
+            #   TE / TEM : omega*mu/beta   = k0*Z0/beta          (TEM: Z0/n)
+            #   TM       : beta/(omega*eps) = beta*Z0/(k0*n^2)
+            # below cut-off TE is inductive (+j), TM capacitive (-j)
+            if self.mode_type == 'TM':
+                self.ZL = self.beta * Z0 / (k0 * self.ref_index**2)
+            else:
+                self.ZL = k0 * Z0 / self.beta
         else:
             self.ZL = ZL
         if ref_impedance is None:
             self.Z_ref = self.ZL
-        super(WaveguidePort, self).CalcPort(sim_path, freq, ref_impedance, ref_plane_shift, signal_type)
+        super(WaveguidePort, self).CalcPort(sim_path, freq, ref_impedance, ref_plane_shift, signal_type, C_excess=C_excess)
 
 class RectWGPort(WaveguidePort):
     """
@@ -526,5 +562,6 @@ class RectWGPort(WaveguidePort):
         if self.N>0:
             H_func[self.ny_PP] = '{}*cos({}*{})*sin({}*{})'.format(self.N/b, self.M*np.pi/a, name_P, self.N*np.pi/b, name_PP)
 
+        kw.setdefault('mode_type', 'TE' if self.TE else 'TM')
         super(RectWGPort, self).__init__(CSX, port_nr=port_nr, start=start, stop=stop, exc_dir=exc_dir, E_WG_func=E_func, H_WG_func=H_func, kc=kc, excite=excite, **kw)
 
