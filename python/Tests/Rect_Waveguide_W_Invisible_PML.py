@@ -16,7 +16,8 @@
  data lines of the port_* files in the Sim_Path folders; they are identical.
 
  Knobs (IPML_PLOT=0 skips the S-parameter figure, IPML_ZMEAN=0 the zero-mean excitation):
-   IPML_PORT_CELLS  cells between each port's excitation and measurement planes (1)
+   IPML_DUMP        full E field dump (0)
+   IPML_PORT_CELLS  cells between each port's excitation and measurement planes (2)
    IPML_MODE  IPML | BLOCK | REAL  (IPML)
    IPML_N     8 | 16 | 32          (8)
    IPML_GAP   in BLOCK mode, the number of air cells between the PEC block face
@@ -51,14 +52,14 @@ os.makedirs(Sim_Path)
 unit = 1e-3  # drawing unit in mm
 
 # WR430: 4.300 x 2.150 in. TE10 cut-off c/2a = 1.372 GHz; recommended band
-# 1.70-2.60 GHz. Below cut-off TE10 is evanescent and the S-parameters are
-# not defined (the port impedance k*Z0/beta is imaginary there).
+# 1.70-2.60 GHz. Below cut-off TE10 is evanescent: the port impedance is
+# imaginary there (inductive), and the S-parameters stay defined.
 a = 109.22
 b = 54.61
 length = 500.0
 
 f0 = 1.55e9  # excitation centre
-fc_exc = 1.45e9  # excitation 20 dB half-width: 0.1 .. 2.5 GHz
+fc_exc = 1.45e9  # excitation 20 dB half-width: f0 - fc_exc .. f0 + fc_exc
 f_start = f0 - fc_exc
 f_stop = f0 + fc_exc
 f_cutoff = C0 / (2 * a * unit)
@@ -110,11 +111,9 @@ if MODE in ('IPML', 'BLOCK'):
     abs2 = CSX.AddAbsorbingBC('abs2', NormalSignPositive=False, AbsorbingBoundaryType=PML_TYPE)
     abs2.AddBox([0, 0, length], [a, b, length], priority=6)
 
-# Define dump box...
-# Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
-# start = [0, 0, 0];
-# stop = [a, b, length];
-# Et.AddBox(start, stop);
+if int(os.environ.get('IPML_DUMP', '0')):  # full E field dump
+    Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
+    Et.AddBox([0, 0, 0], [a, b, length])
 
 print('WR430: a = %.2f mm, b = %.2f mm, TE10 cut-off %.4f GHz; mesh %.3f mm, %d z cells'
       % (a, b, f_cutoff / 1e9, mesh_res, nz))
@@ -129,8 +128,6 @@ with np.errstate(invalid='ignore', divide='ignore'):
     s21 = ports[1].uf_ref / ports[0].uf_inc
 # below cut-off the port impedance is imaginary (TE: inductive), the waves stay defined
 evan = freq <= f_cutoff
-# s11[evan] = np.nan
-# s21[evan] = np.nan
 s11_dB = 20 * np.log10(np.abs(s11))
 s21_dB = 20 * np.log10(np.abs(s21))
 

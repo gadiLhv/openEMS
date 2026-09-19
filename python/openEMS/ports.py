@@ -115,17 +115,10 @@ class Port(object):
     def CalcPort(self, sim_path, freq, ref_impedance=None, ref_plane_shift=None, signal_type='pulse', C_excess=None):
         """Calculate the port voltages, currents and waves at the frequencies freq.
 
-        C_excess : float, optional
-            Excess capacitance (F) in series with the measured voltage. The part
-            of the injected field that is not the mode stays near the source as
-            an evanescent, mostly electric near field; measured a cell or two
-            from the source it adds I/(j*w*C_excess) to the voltage, which pulls
-            U/I below the line impedance at low frequency. It is a property of
-            the port (template, mesh, measurement distance), not of the DUT, so
-            it can be fitted once on a matched line and reused. It exists only
-            at the EXCITED port -- a passive port has no source near its
-            measurement plane -- so pass it for the excited port only. None: no
-            correction.
+        :param C_excess: float -- optional excess capacitance (F) in series with
+            the measured voltage of an EXCITED port: the non-modal part of the
+            injected field adds I/(j*w*C_excess) near the source. It depends on
+            the port (template, mesh, measurement distance), not on the DUT.
         """
         self.ReadUIData(sim_path, freq, signal_type)
 
@@ -363,12 +356,10 @@ class WaveguidePort(Port):
     --------
     Port, RectWGPort
 
+    :param mode_type: 'TEM' (default), 'TE' or 'TM' -- selects the analytic wave
+        impedance used as the port's reference impedance, see CalcPort.
     """
     def __init__(self, CSX, port_nr, start, stop, exc_dir, E_WG_func, H_WG_func, kc, excite = 0, excite_type = 0, E_WG_file = None, H_WG_file = None, mode_type = 'TEM', **kw):
-        """
-        mode_type : 'TEM' (default), 'TE' or 'TM' -- selects the wave impedance
-            used as the port's reference impedance, see CalcPort.
-        """
         self.mode_type = str(mode_type).upper()
         if self.mode_type not in ('TEM', 'TE', 'TM'):
             raise Exception("mode_type must be 'TEM', 'TE' or 'TM', got '{}'".format(mode_type))

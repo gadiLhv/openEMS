@@ -14,11 +14,13 @@
                     past each end into openEMS' own PML_N y boundaries
 
  Knobs (IPML_PLOT=0 skips the S-parameter figure, IPML_ZMEAN=0 the zero-mean excitation):
+   IPML_DUMP        full E field dump (0)
+   IPML_VIEW        open the structure in AppCSXCAD before running (0)
    IPML_CEX         excess capacitance of the excited port: '' off, pF, or 'auto' (fit)
    IPML_PORT_CELLS  cells between each port's excitation and measurement planes (1)
    IPML_MODE   IPML | BLOCK | REAL          (IPML)
    IPML_N      8 | 16 | 32                  (8)
-   IPML_SIDES  MUR | PEC  x and z boundaries (MUR). With PEC, IPML and BLOCK
+   IPML_SIDES  MUR | PEC  x and z boundaries (PEC). With PEC, IPML and BLOCK
                reproduce REAL to round-off. With MUR they differ slightly at
                the rim of the PML: openEMS' Mur runs over the whole x/z faces,
                into the real PML, while the virtual PML is closed by PEC there.
@@ -198,13 +200,12 @@ if MODE in ('IPML', 'BLOCK'):
     abs2 = CSX.AddAbsorbingBC('abs2', NormalSignPositive=False, AbsorbingBoundaryType=PML_TYPE)
     abs2.AddBox(box(xz0, substrate_length), box(xz1, substrate_length), priority=60)
 
-# Define dump box...
-# Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
-# start = [float(SimBox[0]), float(SimBox[2]), float(SimBox[4])];
-# stop = [float(SimBox[1]), float(SimBox[3]), float(SimBox[5])];
-# Et.AddBox(start, stop);
+if int(os.environ.get('IPML_DUMP', '0')):  # full E field dump
+    Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
+    Et.AddBox([float(SimBox[0]), float(SimBox[2]), float(SimBox[4])],
+              [float(SimBox[1]), float(SimBox[3]), float(SimBox[5])])
 
-if int(os.environ.get('IPML_VIEW', '0')):  # debugging only; IPML_VIEW=0 skips the viewer
+if int(os.environ.get('IPML_VIEW', '0')):  # show the structure before running
     CSX_file = os.path.join(Sim_Path, 'CPW_IPML.xml')
     if not os.path.exists(Sim_Path):
         os.mkdir(Sim_Path)

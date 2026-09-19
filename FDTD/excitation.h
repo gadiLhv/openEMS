@@ -66,30 +66,14 @@ public:
 
 	//! Force the excitation waveform to have zero time-integral.
 	/*!
-	  A soft E excitation adds dE to the field every step, so the NET charge it
-	  deposits is proportional to the time-integral of its waveform. If that
-	  integral is non-zero the leftover is an electrostatic field, and inside a
-	  structure closed by PEC there is nothing that can remove it: it simply
-	  sits there and stops any energy-based convergence test from ever tripping.
-
-	  Measured on a PTFE coax driven at 1.55 +- 1.45 GHz, whose waveform carries
-	  |V(f=0)| = 0.153 of its spectral peak: a static transverse field pinned to
-	  the source plane at 16x the line background, holding 85% of all the static
-	  residue in the model, still there after 300000 timesteps. The same model
-	  driven at 2.10 +- 0.80 GHz, where |V(f=0)| = 0.0000, converges normally.
-
-	  The correction subtracts a Hann-shaped bump scaled to cancel the integral
-	  exactly. A plain mean subtraction would leave a step at both ends of the
-	  support -- broadband, and worse than what it fixes. The Hann vanishes at
-	  both ends with zero slope, so the corrected waveform still starts and ends
-	  quietly. It necessarily reshapes the spectrum immediately around DC; that
-	  is the part which cannot propagate anyway.
+	  A soft excitation deposits net charge proportional to the time-integral of
+	  its waveform. Inside a structure closed by PEC the leftover static field
+	  cannot leave, and it keeps the energy criterion from ever tripping.
+	  The correction subtracts a Hann-shaped bump that cancels the integral; unlike
+	  a plain mean subtraction it leaves no step at the ends of the support. Only
+	  the spectrum immediately around DC is reshaped.
 	  */
 	void SetZeroMean(bool val) {m_ZeroMean=val;}
-
-	//! Subtract a Hann-shaped bump so the waveform integral is zero. \sa SetZeroMean
-	void RemoveSignalMean();
-
 	bool GetZeroMean() const {return m_ZeroMean;}
 
 	//! Get the max frequency excited by this signal
@@ -107,6 +91,9 @@ public:
 	FDTD_FLOAT* GetCurrentSignal() const {return Signal_curr;}
 
 protected:
+	//! Subtract the Hann-shaped bump that makes the waveform integral zero. \sa SetZeroMean
+	void RemoveSignalMean();
+
 	double dT;
 	unsigned int m_nyquistTS;
 	bool m_ZeroMean;

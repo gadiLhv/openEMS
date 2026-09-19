@@ -165,9 +165,7 @@ bool Operator_Ext_InvisiblePML::BuildExtension()
 
 	int s = m_normalSignPositive ? +1 : -1;
 	unsigned int k0 = m_sheetX0[m_ny];
-	unsigned int pos[3];
 
-	pos[m_ny] = k0;
 	m_delta = fabs(m_Op->GetDiscLine(m_ny,k0+s) - m_Op->GetDiscLine(m_ny,k0)) * m_Op->GetGridDelta();
 	double delta2 = fabs(m_Op->GetDiscLine(m_ny,k0+2*s) - m_Op->GetDiscLine(m_ny,k0+s)) * m_Op->GetGridDelta();
 	if (fabs(delta2/m_delta-1) > 0.01)

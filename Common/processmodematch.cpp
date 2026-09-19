@@ -98,8 +98,7 @@ void ProcessModeMatch::InitProcess()
 			start[n]=stop[n];
 			stop[n]=help;
 		}
-		// taken BEFORE the boundary exclusion below moves start inwards, or a port
-		// whose window touches the domain boundary reads its template a cell off
+		// before the boundary exclusion below moves start inwards
 		origin[n] = start[n];
 
 		//exclude boundaries from mode-matching
@@ -150,29 +149,16 @@ void ProcessModeMatch::InitProcess()
 		m_ModeDist[n] = Create2DArray<double>(m_numLines);
 	}
 
-	// The template is looked up where the field is sampled. InitProcess sets
-	// NODE_INTERPOLATE, which puts E *and* H on the primary nodes (for H, the
-	// average of the four dual samples around the node, which also centres it
-	// on the measurement plane). Looking the H template up on the dual lines
-	// instead left it half a cell off in both transverse directions -- and on a
-	// graded mesh, measured from the first dual line, off by (d_k - d_start)/2
-	// per line: a CPW current probe caught 13% of the H energy instead of 99%.
-	bool dualMesh = false;
+	// NODE_INTERPOLATE (set above) places E *and* H on the primary nodes, so the
+	// template is looked up there for both field types, never on the dual mesh.
 	unsigned int pos[3] = {0,0,0};
 	double discLine[3] = {0,0,0};
 	double gridDelta = 1; // 1 -> mode-matching function is defined in drawing units...
 	double var[7];
 	pos[m_ny] = start[m_ny];
-	discLine[m_ny] = Op->GetDiscLine(m_ny,pos[m_ny],dualMesh);
+	discLine[m_ny] = Op->GetDiscLine(m_ny,pos[m_ny]);
 	double norm = 0;
 	double area = 0;
-
-	// Remove 1 from the number of lines if this is a magentic field. It samples 1 cell too many
-	if (dualMesh)
-	{
-		m_numLines[0]--;
-		m_numLines[1]--;
-	}
 
 	// If necessary, parse the file now
 	CSModeFileParser modeFile;
@@ -182,11 +168,11 @@ void ProcessModeMatch::InitProcess()
 	for (unsigned int posP = 0; posP < m_numLines[0]; ++posP)
 	{
 		pos[nP] = start[nP] + posP;
-		discLine[nP] = Op->GetDiscLine(nP,pos[nP],dualMesh);
+		discLine[nP] = Op->GetDiscLine(nP,pos[nP]);
 		for (unsigned int posPP = 0; posPP<m_numLines[1]; ++posPP)
 		{
 			pos[nPP] = start[nPP] + posPP;
-			discLine[nPP] = Op->GetDiscLine(nPP,pos[nPP],dualMesh);
+			discLine[nPP] = Op->GetDiscLine(nPP,pos[nPP]);
 
 			var[0] = discLine[0] * gridDelta; // x
 			var[1] = discLine[1] * gridDelta; // y
@@ -205,14 +191,14 @@ void ProcessModeMatch::InitProcess()
 				var[5] = sqrt(pow(discLine[0],2)+pow(discLine[2],2)) * gridDelta; // r
 				var[6] = asin(1)-atan(var[2]/var[3]); //theta (t)
 			}
-			area = Op->GetNodeArea(m_ny,pos,dualMesh);
+			area = Op->GetNodeArea(m_ny,pos);
 
 			if (m_FieldSourceIsFile)
 			{
 				double locCoord[3] = {
-						discLine[0] - Op->GetDiscLine(0,origin[0],dualMesh),
-						discLine[1] - Op->GetDiscLine(1,origin[1],dualMesh),
-						discLine[2] - Op->GetDiscLine(2,origin[2],dualMesh)};
+						discLine[0] - Op->GetDiscLine(0,origin[0]),
+						discLine[1] - Op->GetDiscLine(1,origin[1]),
+						discLine[2] - Op->GetDiscLine(2,origin[2])};
 
 				modeFile.LinInterp2(locCoord[nP],locCoord[nPP],m_ModeDist[0][posP][posPP],m_ModeDist[1][posP][posPP]);
 			}
@@ -279,7 +265,6 @@ double* ProcessModeMatch::CalcMultipleIntegrals()
 	double field = 0;
 	double purity = 0;
 	double area = 0;
-	bool dualMesh = false; // primary node areas, matching InitProcess
 
 	int nP = (m_ny+1)%3;
 	int nPP = (m_ny+2)%3;
@@ -295,7 +280,7 @@ double* ProcessModeMatch::CalcMultipleIntegrals()
 		for (unsigned int posPP = 0; posPP<m_numLines[1]; ++posPP)
 		{
 			pos[nPP] = start[nPP] + posPP;
-			area = Op->GetNodeArea(m_ny,pos,dualMesh);
+			area = Op->GetNodeArea(m_ny,pos);
 			if (m_ModeFieldType==0)
 				m_Eng_Interface->GetEField(pos,out);
 			if (m_ModeFieldType==1)
