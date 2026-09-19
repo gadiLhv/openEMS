@@ -89,6 +89,7 @@ void ProcessModeMatch::InitProcess()
 
 	int Dump_Dim=0;
 	m_ny = -1;
+	unsigned int origin[3]; // the port's own start line: the template's local origin
 	for (int n=0; n<3; ++n)
 	{
 		if (start[n]>stop[n])
@@ -97,6 +98,9 @@ void ProcessModeMatch::InitProcess()
 			start[n]=stop[n];
 			stop[n]=help;
 		}
+		// taken BEFORE the boundary exclusion below moves start inwards, or a port
+		// whose window touches the domain boundary reads its template a cell off
+		origin[n] = start[n];
 
 		//exclude boundaries from mode-matching
 		if (start[n]==0)
@@ -146,7 +150,14 @@ void ProcessModeMatch::InitProcess()
 		m_ModeDist[n] = Create2DArray<double>(m_numLines);
 	}
 
-	bool dualMesh = m_ModeFieldType==1;
+	// The template is looked up where the field is sampled. InitProcess sets
+	// NODE_INTERPOLATE, which puts E *and* H on the primary nodes (for H, the
+	// average of the four dual samples around the node, which also centres it
+	// on the measurement plane). Looking the H template up on the dual lines
+	// instead left it half a cell off in both transverse directions -- and on a
+	// graded mesh, measured from the first dual line, off by (d_k - d_start)/2
+	// per line: a CPW current probe caught 13% of the H energy instead of 99%.
+	bool dualMesh = false;
 	unsigned int pos[3] = {0,0,0};
 	double discLine[3] = {0,0,0};
 	double gridDelta = 1; // 1 -> mode-matching function is defined in drawing units...
@@ -199,9 +210,9 @@ void ProcessModeMatch::InitProcess()
 			if (m_FieldSourceIsFile)
 			{
 				double locCoord[3] = {
-						discLine[0] - Op->GetDiscLine(0,start[0],dualMesh),
-						discLine[1] - Op->GetDiscLine(1,start[1],dualMesh),
-						discLine[2] - Op->GetDiscLine(2,start[2],dualMesh)};
+						discLine[0] - Op->GetDiscLine(0,origin[0],dualMesh),
+						discLine[1] - Op->GetDiscLine(1,origin[1],dualMesh),
+						discLine[2] - Op->GetDiscLine(2,origin[2],dualMesh)};
 
 				modeFile.LinInterp2(locCoord[nP],locCoord[nPP],m_ModeDist[0][posP][posPP],m_ModeDist[1][posP][posPP]);
 			}
@@ -268,7 +279,7 @@ double* ProcessModeMatch::CalcMultipleIntegrals()
 	double field = 0;
 	double purity = 0;
 	double area = 0;
-    bool dualMesh = m_ModeFieldType==1;
+	bool dualMesh = false; // primary node areas, matching InitProcess
 
 	int nP = (m_ny+1)%3;
 	int nPP = (m_ny+2)%3;
