@@ -14,6 +14,8 @@
                     past each end into openEMS' own PML_N y boundaries
 
  Knobs (IPML_PLOT=0 skips the S-parameter figure, IPML_ZMEAN=0 the zero-mean excitation):
+   IPML_CEX         excess capacitance of the excited port: '' off, pF, or 'auto' (fit)
+   IPML_PORT_CELLS  cells between each port's excitation and measurement planes (1)
    IPML_MODE   IPML | BLOCK | REAL          (IPML)
    IPML_N      8 | 16 | 32                  (8)
    IPML_SIDES  MUR | PEC  x and z boundaries (MUR). With PEC, IPML and BLOCK
@@ -34,7 +36,9 @@ from openEMS.physical_constants import C0
 from CSXCAD.CSProperties import ABCtype
 
 MODE = os.environ.get('IPML_MODE', 'IPML').upper()
-N = int(os.environ.get('IPML_N', '32'))
+N = int(os.environ.get('IPML_N', '8'))
+PORT_CELLS = int(os.environ.get('IPML_PORT_CELLS', '1'))  # cells between a port's excitation
+assert PORT_CELLS >= 1                                   # plane and its measurement plane
 SIDES = os.environ.get('IPML_SIDES', 'PEC').upper()
 
 assert MODE in ('IPML', 'BLOCK', 'REAL')
@@ -168,9 +172,9 @@ shutil.copy("CPW_IPML_H.csv", Sim_Path)
 
 # ports 4 cells in from each end, as far from the sheets as in the MSL test
 yP1, yP2 = 4 * dy, substrate_length - 4 * dy
-port1 = FDTD.AddWaveGuidePort(1, [-p_x, yP1, p_z0], [p_x, yP1 + dy, p_z1], 'y',
+port1 = FDTD.AddWaveGuidePort(1, [-p_x, yP1, p_z0], [p_x, yP1 + PORT_CELLS * dy, p_z1], 'y',
                               E_file="CPW_IPML_E.csv", H_file="CPW_IPML_H.csv", kc=0.0, excite=1, excite_type=0)
-port2 = FDTD.AddWaveGuidePort(2, [-p_x, yP2, p_z0], [p_x, yP2 - dy, p_z1], 'y',
+port2 = FDTD.AddWaveGuidePort(2, [-p_x, yP2, p_z0], [p_x, yP2 - PORT_CELLS * dy, p_z1], 'y',
                               E_file="CPW_IPML_E.csv", H_file="CPW_IPML_H.csv", kc=0.0, excite=0, excite_type=0)
 
 xz0 = [-p_x * 1.5, p_z0 - (p_z1 - p_z0) * 0.25]
@@ -195,12 +199,12 @@ if MODE in ('IPML', 'BLOCK'):
     abs2.AddBox(box(xz0, substrate_length), box(xz1, substrate_length), priority=60)
 
 # Define dump box...
-Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
-start = [float(SimBox[0]), float(SimBox[2]), float(SimBox[4])];
-stop = [float(SimBox[1]), float(SimBox[3]), float(SimBox[5])];
-Et.AddBox(start, stop);
+# Et = CSX.AddDump('Et', file_type=0, dump_type=0, dump_mode=1)
+# start = [float(SimBox[0]), float(SimBox[2]), float(SimBox[4])];
+# stop = [float(SimBox[1]), float(SimBox[3]), float(SimBox[5])];
+# Et.AddBox(start, stop);
 
-if int(os.environ.get('IPML_VIEW', '1')):  # debugging only; IPML_VIEW=0 skips the viewer
+if int(os.environ.get('IPML_VIEW', '0')):  # debugging only; IPML_VIEW=0 skips the viewer
     CSX_file = os.path.join(Sim_Path, 'CPW_IPML.xml')
     if not os.path.exists(Sim_Path):
         os.mkdir(Sim_Path)
@@ -216,9 +220,38 @@ FDTD.Run(Sim_Path, verbose=3, cleanup=False)
 # ## Post-processing -- as in CPW_With_WG_Ports.py
 Zl = _mp['Zl']  # from the mode solve, not hand-copied
 Zw = _mp['Zw']
-freq = np.linspace(max(1e9, f0 - fc), f0 + fc, 401)
+freq = np.linspace(f0 - fc, f0 + fc, 401)
 port1.CalcPort(Sim_Path, freq, ref_impedance=Zw, ZL=Zl)
 port2.CalcPort(Sim_Path, freq, ref_impedance=Zw, ZL=Zl)
+# Z_ref, measured by the passive port. The mode-match probes normalise their
+# templates, so a forward wave gives U/I = the port's own ratio, which is the
+# DISCRETE line's impedance -- a continuum mode solver does not give it (the
+# staircased line has its own L and C). Port 2 is not excited and the invisible
+# PML behind it absorbs everything, so it only ever sees the outgoing wave:
+# -U2/I2 (its current probe points into the line) IS Z_ref, per frequency.
+# Both ports sit on the same line, so the one value serves both.
+Z_ref = -port2.uf_tot / port2.if_tot
+for p in (port1, port2):
+    p.CalcPort(Sim_Path, freq, ref_impedance=Z_ref)
+print('Z_ref from the passive port: Re %.2f .. %.2f Ohm, |Im| <= %.2f Ohm'
+      % (Z_ref.real.min(), Z_ref.real.max(), abs(Z_ref.imag).max()))
+
+# Excess capacitance of the EXCITED port (see Port.CalcPort, C_excess): the
+# injected field that is not the mode stays near the source and adds
+# I/(j*w*C_ex) to port 1's voltage. IPML_CEX: '' off, a value in pF, or 'auto'
+# -- fitted here from port 1 over f <= 1 GHz, which is valid because this test
+# is a matched line (port 1 then sees Z_ref plus the excess reactance only).
+CEX = os.environ.get('IPML_CEX', '').strip().lower()
+C_ex = None
+if CEX == 'auto':
+    lf = freq <= 1e9
+    dZ = port1.uf_tot / port1.if_tot - Z_ref
+    C_ex = -1.0 / np.mean(2 * np.pi * freq[lf] * dZ.imag[lf])
+elif CEX:
+    C_ex = float(CEX) * 1e-12
+if C_ex:
+    port1.CalcPort(Sim_Path, freq, ref_impedance=Z_ref, C_excess=C_ex)
+    print('C_excess of the excited port: %.3f pF (%s)' % (C_ex * 1e12, 'fitted' if CEX == 'auto' else 'given'))
 s11 = port1.uf_ref / port1.uf_inc
 s21 = port2.uf_ref / port1.uf_inc
 print('\n  f/GHz   |S11| dB   |S21| dB')

@@ -19,6 +19,8 @@
  With every wall PEC, IPML and BLOCK reproduce REAL to round-off.
 
  Knobs:
+   IPML_CEX         excess capacitance of the excited port: '' off, pF, or 'auto' (fit)
+   IPML_PORT_CELLS  cells between each port's excitation and measurement planes (1)
    IPML_MODE   IPML | BLOCK | REAL   (IPML)
    IPML_N      8 | 16 | 32           (8)
    IPML_ZMEAN  zero-mean excitation  (1)
@@ -42,6 +44,8 @@ from CSXCAD.CSProperties import ABCtype
 
 MODE = os.environ.get('IPML_MODE', 'IPML').upper()
 N = int(os.environ.get('IPML_N', '8'))
+PORT_CELLS = int(os.environ.get('IPML_PORT_CELLS', '1'))  # cells between a port's excitation
+assert PORT_CELLS >= 1                                   # plane and its measurement plane
 assert MODE in ('IPML', 'BLOCK', 'REAL')
 assert N in (8, 16, 32)
 PML_TYPE = {8: ABCtype.PML_8, 16: ABCtype.PML_16, 32: ABCtype.PML_32}[N]
@@ -127,9 +131,9 @@ mesh.SmoothMeshLines('y', mesh_res, 1.25)
 
 # ports 4 cells in from each end, as in the other invisible PML tests
 zP1, zP2 = 4 * dz, coax_L - 4 * dz
-port1 = FDTD.AddWaveGuidePort(1, [-r_box, -r_box, zP1], [r_box, r_box, zP1 + dz], 'z',
+port1 = FDTD.AddWaveGuidePort(1, [-r_box, -r_box, zP1], [r_box, r_box, zP1 + PORT_CELLS * dz], 'z',
                               E_file="Coax_Er.csv", H_file="Coax_Hr.csv", kc=0.0, excite=1, excite_type=0)
-port2 = FDTD.AddWaveGuidePort(2, [-r_box, -r_box, zP2], [r_box, r_box, zP2 - dz], 'z',
+port2 = FDTD.AddWaveGuidePort(2, [-r_box, -r_box, zP2], [r_box, r_box, zP2 - PORT_CELLS * dz], 'z',
                               E_file="Coax_Er.csv", H_file="Coax_Hr.csv", kc=0.0, excite=0, excite_type=0)
 
 if MODE == 'BLOCK':
@@ -154,6 +158,35 @@ FDTD.Run(Sim_Path, verbose=3, cleanup=False)
 freq = np.linspace(max(1e9, f0 - fc), f0 + fc, 401)
 port1.CalcPort(Sim_Path, freq, ref_impedance=Zw, ZL=Zl)
 port2.CalcPort(Sim_Path, freq, ref_impedance=Zw, ZL=Zl)
+# Z_ref, measured by the passive port. The mode-match probes normalise their
+# templates, so a forward wave gives U/I = the port's own ratio, which is the
+# DISCRETE line's impedance -- a continuum mode solver does not give it (the
+# staircased line has its own L and C). Port 2 is not excited and the invisible
+# PML behind it absorbs everything, so it only ever sees the outgoing wave:
+# -U2/I2 (its current probe points into the line) IS Z_ref, per frequency.
+# Both ports sit on the same line, so the one value serves both.
+Z_ref = -port2.uf_tot / port2.if_tot
+for p in (port1, port2):
+    p.CalcPort(Sim_Path, freq, ref_impedance=Z_ref)
+print('Z_ref from the passive port: Re %.2f .. %.2f Ohm, |Im| <= %.2f Ohm'
+      % (Z_ref.real.min(), Z_ref.real.max(), abs(Z_ref.imag).max()))
+
+# Excess capacitance of the EXCITED port (see Port.CalcPort, C_excess): the
+# injected field that is not the mode stays near the source and adds
+# I/(j*w*C_ex) to port 1's voltage. IPML_CEX: '' off, a value in pF, or 'auto'
+# -- fitted here from port 1 over f <= 1 GHz, which is valid because this test
+# is a matched line (port 1 then sees Z_ref plus the excess reactance only).
+CEX = os.environ.get('IPML_CEX', '').strip().lower()
+C_ex = None
+if CEX == 'auto':
+    lf = freq <= 1e9
+    dZ = port1.uf_tot / port1.if_tot - Z_ref
+    C_ex = -1.0 / np.mean(2 * np.pi * freq[lf] * dZ.imag[lf])
+elif CEX:
+    C_ex = float(CEX) * 1e-12
+if C_ex:
+    port1.CalcPort(Sim_Path, freq, ref_impedance=Z_ref, C_excess=C_ex)
+    print('C_excess of the excited port: %.3f pF (%s)' % (C_ex * 1e12, 'fitted' if CEX == 'auto' else 'given'))
 s11 = port1.uf_ref / port1.uf_inc
 s21 = port2.uf_ref / port1.uf_inc
 print('\n  f/GHz   |S11| dB   |S21| dB')
