@@ -50,7 +50,11 @@ COAX_R_OUTER = 4.0
 PORT_MARGIN = 2.0  # mm, window beyond the coax outer conductor, each side
 
 # mesh
-PORT_RES = 0.5  # mm, uniform cells across the port window (x and y); 1.0 gives backward-wave coax modes that the PML amplifies (debug_pml_backward/)
+PORT_MESH = 'refined'  # 'original' (1.0 mm: the coax carries backward-wave modes that the PML amplifies, diverges at ~33 GHz) or 'refined'
+ORIGINAL_RES = 1.0  # mm, uniform cells across the port window (x and y) for PORT_MESH = 'original'
+REFINED_RES = 0.5  # mm, the same for PORT_MESH = 'refined' (stable; see debug_pml_backward/)
+assert PORT_MESH in ('original', 'refined')
+PORT_RES = ORIGINAL_RES if PORT_MESH == 'original' else REFINED_RES
 N_COAX_CELLS = 5  # z cells in the coax section (-2.8..-1.575)
 N_SUB_CELLS = 4  # z cells in the substrate (-1.575..0)
 AIR_MARGIN = 30.0  # mm of air beyond the board on every side (~lambda/4 at F_RES)
