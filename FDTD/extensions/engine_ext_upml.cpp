@@ -30,6 +30,17 @@ Engine_Ext_UPML::Engine_Ext_UPML(Operator_Ext_UPML* op_ext) : Engine_Extension(o
 
 	volt_flux.Init("volt_flux", m_Op_UPML->m_numLines);
 	curr_flux.Init("curr_flux", m_Op_UPML->m_numLines);
+	if (m_Op_UPML->m_CFS)
+	{
+		const char* nm[2][4] = {{"cfs_vG","cfs_vD","cfs_vF","cfs_vE"},{"cfs_iG","cfs_iD","cfs_iF","cfs_iE"}};
+		for (int f=0; f<2; ++f)
+		{
+			cfs_G[f].Init(nm[f][0], m_Op_UPML->m_numLines);
+			cfs_D[f].Init(nm[f][1], m_Op_UPML->m_numLines);
+			cfs_F[f].Init(nm[f][2], m_Op_UPML->m_numLines);
+			cfs_E[f].Init(nm[f][3], m_Op_UPML->m_numLines);
+		}
+	}
 
 	SetNumberOfThreads(1);
 }
@@ -57,6 +68,12 @@ void Engine_Ext_UPML::DoPreVoltageUpdatesImpl(EngType* eng, int threadID)
 
 	if (threadID>=m_NrThreads)
 		return;
+
+	if (m_Op_UPML->m_CFS)
+	{
+		CFSPreImpl(eng, threadID, 0);
+		return;
+	}
 
 	unsigned int pos[3];
 	unsigned int loc_pos[3];
@@ -105,6 +122,12 @@ void Engine_Ext_UPML::DoPostVoltageUpdatesImpl(EngType* eng, int threadID)
 	if (threadID>=m_NrThreads)
 		return;
 
+	if (m_Op_UPML->m_CFS)
+	{
+		CFSPostImpl(eng, threadID, 0);
+		return;
+	}
+
 	unsigned int pos[3];
 	unsigned int loc_pos[3];
 	FDTD_FLOAT f_help;
@@ -148,6 +171,12 @@ void Engine_Ext_UPML::DoPreCurrentUpdatesImpl(EngType* eng, int threadID)
 		return;
 	if (threadID>=m_NrThreads)
 		return;
+
+	if (m_Op_UPML->m_CFS)
+	{
+		CFSPreImpl(eng, threadID, 1);
+		return;
+	}
 
 	unsigned int pos[3];
 	unsigned int loc_pos[3];
@@ -197,6 +226,12 @@ void Engine_Ext_UPML::DoPostCurrentUpdatesImpl(EngType* eng, int threadID)
 	if (threadID>=m_NrThreads)
 		return;
 
+	if (m_Op_UPML->m_CFS)
+	{
+		CFSPostImpl(eng, threadID, 1);
+		return;
+	}
+
 	unsigned int pos[3];
 	unsigned int loc_pos[3];
 	FDTD_FLOAT f_help;
@@ -231,4 +266,92 @@ void Engine_Ext_UPML::DoPostCurrentUpdatesImpl(EngType* eng, int threadID)
 void Engine_Ext_UPML::DoPostCurrentUpdates(int threadID)
 {
 	ENG_DISPATCH_ARGS(DoPostCurrentUpdatesImpl, threadID);
+}
+
+template <typename EngType>
+void Engine_Ext_UPML::CFSPreImpl(EngType* eng, int threadID, int fld)
+{
+	// hand the main engine the integrated curl G; keep the old field
+	const Operator_Ext_UPML* op = m_Op_UPML;
+	const ArrayLib::ArrayNIJK<FDTD_FLOAT>& on = fld ? op->i_on : op->v_on;
+	unsigned int pos[3], l[3];
+	for (unsigned int lineX=0; lineX<m_numX.at(threadID); ++lineX)
+	{
+		l[0]=lineX+m_start.at(threadID);
+		pos[0] = l[0] + op->m_StartPos[0];
+		for (l[1]=0; l[1]<op->m_numLines[1]; ++l[1])
+		{
+			pos[1] = l[1] + op->m_StartPos[1];
+			for (l[2]=0; l[2]<op->m_numLines[2]; ++l[2])
+			{
+				pos[2] = l[2] + op->m_StartPos[2];
+				for (int n=0; n<3; ++n)
+				{
+					if (on(n,l[0],l[1],l[2])==0)
+						continue;
+					if (fld==0)
+					{
+						cfs_E[0](n,l[0],l[1],l[2]) = eng->EngType::GetVolt(n,pos);
+						eng->EngType::SetVolt(n,pos, cfs_G[0](n,l[0],l[1],l[2]));
+					}
+					else
+					{
+						cfs_E[1](n,l[0],l[1],l[2]) = eng->EngType::GetCurr(n,pos);
+						eng->EngType::SetCurr(n,pos, cfs_G[1](n,l[0],l[1],l[2]));
+					}
+				}
+			}
+		}
+	}
+}
+
+template <typename EngType>
+void Engine_Ext_UPML::CFSPostImpl(EngType* eng, int threadID, int fld)
+{
+	// G -> D (s_nP) -> F (s_n) -> E (s_nPP, eps/mu): three bilinear first-order filters
+	const Operator_Ext_UPML* op = m_Op_UPML;
+	const ArrayLib::ArrayNIJK<FDTD_FLOAT>& on  = fld ? op->i_on  : op->v_on;
+	const ArrayLib::ArrayNIJK<FDTD_FLOAT>& dd  = fld ? op->i_dd  : op->v_dd;
+	const ArrayLib::ArrayNIJK<FDTD_FLOAT>& dgn = fld ? op->i_dgn : op->v_dgn;
+	const ArrayLib::ArrayNIJK<FDTD_FLOAT>& dgo = fld ? op->i_dgo : op->v_dgo;
+	const ArrayLib::ArrayNIJK<FDTD_FLOAT>& ff  = fld ? op->i_ff  : op->v_ff;
+	const ArrayLib::ArrayNIJK<FDTD_FLOAT>& fdn = fld ? op->i_fdn : op->v_fdn;
+	const ArrayLib::ArrayNIJK<FDTD_FLOAT>& fdo = fld ? op->i_fdo : op->v_fdo;
+	const ArrayLib::ArrayNIJK<FDTD_FLOAT>& ee  = fld ? op->i_ee  : op->v_ee;
+	const ArrayLib::ArrayNIJK<FDTD_FLOAT>& efn = fld ? op->i_efn : op->v_efn;
+	const ArrayLib::ArrayNIJK<FDTD_FLOAT>& efo = fld ? op->i_efo : op->v_efo;
+	ArrayLib::ArrayNIJK<FDTD_FLOAT>& G = cfs_G[fld];
+	ArrayLib::ArrayNIJK<FDTD_FLOAT>& D = cfs_D[fld];
+	ArrayLib::ArrayNIJK<FDTD_FLOAT>& F = cfs_F[fld];
+	ArrayLib::ArrayNIJK<FDTD_FLOAT>& Eo = cfs_E[fld];
+	unsigned int pos[3], l[3];
+	FDTD_FLOAT Gn, Dn, Fn;
+	for (unsigned int lineX=0; lineX<m_numX.at(threadID); ++lineX)
+	{
+		l[0]=lineX+m_start.at(threadID);
+		pos[0] = l[0] + op->m_StartPos[0];
+		for (l[1]=0; l[1]<op->m_numLines[1]; ++l[1])
+		{
+			pos[1] = l[1] + op->m_StartPos[1];
+			for (l[2]=0; l[2]<op->m_numLines[2]; ++l[2])
+			{
+				pos[2] = l[2] + op->m_StartPos[2];
+				for (int n=0; n<3; ++n)
+				{
+					const unsigned int i=l[0], j=l[1], k=l[2];
+					if (on(n,i,j,k)==0)
+						continue;
+					Gn = fld ? eng->EngType::GetCurr(n,pos) : eng->EngType::GetVolt(n,pos);
+					Dn = dd(n,i,j,k)*D(n,i,j,k) + dgn(n,i,j,k)*Gn - dgo(n,i,j,k)*G(n,i,j,k);
+					Fn = ff(n,i,j,k)*F(n,i,j,k) + fdn(n,i,j,k)*Dn - fdo(n,i,j,k)*D(n,i,j,k);
+					FDTD_FLOAT En = ee(n,i,j,k)*Eo(n,i,j,k) + efn(n,i,j,k)*Fn - efo(n,i,j,k)*F(n,i,j,k);
+					G(n,i,j,k) = Gn;  D(n,i,j,k) = Dn;  F(n,i,j,k) = Fn;
+					if (fld)
+						eng->EngType::SetCurr(n,pos, En);
+					else
+						eng->EngType::SetVolt(n,pos, En);
+				}
+			}
+		}
+	}
 }

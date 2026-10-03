@@ -56,6 +56,13 @@ protected:
 	template <typename EngType>
 	void DoPostCurrentUpdatesImpl(EngType* eng, int threadID);
 
+	//! EXPERIMENTAL CFS path (Operator_Ext_UPML::m_CFS): fld 0 = voltages, 1 = currents
+	template <typename EngType>
+	void CFSPreImpl(EngType* eng, int threadID, int fld);
+	template <typename EngType>
+	void CFSPostImpl(EngType* eng, int threadID, int fld);
+	ArrayLib::ArrayNIJK<FDTD_FLOAT> cfs_G[2], cfs_D[2], cfs_F[2], cfs_E[2];
+
 	Operator_Ext_UPML* m_Op_UPML;
 
 	std::vector<unsigned int> m_start;

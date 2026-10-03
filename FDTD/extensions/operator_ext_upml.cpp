@@ -34,6 +34,14 @@ Operator_Ext_UPML::Operator_Ext_UPML(Operator* op) : Operator_Extension(op)
 		m_BC[n]=0;
 		m_Size[n]=0;
 	}
+
+	// EXPERIMENTAL CFS settings (see the header)
+	const char* e = getenv("UPML_CFS");
+	m_CFS = (e && atoi(e));
+	m_CFS_KMax    = getenv("UPML_CFS_KMAX")   ? atof(getenv("UPML_CFS_KMAX"))   : 1.0;
+	m_CFS_AlphaMax = (getenv("UPML_CFS_FALPHA") ? atof(getenv("UPML_CFS_FALPHA")) : 0.0) * 2*PI*__EPS0__;
+	m_CFS_M       = getenv("UPML_CFS_M")      ? atof(getenv("UPML_CFS_M"))      : 3.0;
+	m_CFS_MA      = getenv("UPML_CFS_MA")     ? atof(getenv("UPML_CFS_MA"))     : 1.0;
 	for (int n=0; n<3; ++n)
 	{
 		m_StartPos[n]=0;
@@ -266,12 +274,33 @@ bool Operator_Ext_UPML::SetGradingFunction(string func)
 	return false;
 }
 
-void Operator_Ext_UPML::CalcGradingKappa(int ny, unsigned int pos[3], double Zm, double kappa_v[3], double kappa_i[3])
+void Operator_Ext_UPML::CFSProfile(double depth, double width, double& k, double& a) const
+{
+	double r = (width>0) ? depth/width : 0;
+	if (r<0) r=0;
+	if (r>1) r=1;
+	k = 1.0 + (m_CFS_KMax-1.0)*pow(r, m_CFS_M);
+	a = m_CFS_AlphaMax*pow(1.0-r, m_CFS_MA);
+}
+
+void Operator_Ext_UPML::CFSFactor(double k, double sigma, double alpha, double dT, double& b0, double& b1, double& a0, double& a1)
+{
+	// s*X = Y with s = k + sigma/(alpha + j w eps0)  <=>  (j w eps0 k + k alpha + sigma) X = (j w eps0 + alpha) Y
+	// bilinear: b0 X^{n+1} - b1 X^n = a0 Y^{n+1} - a1 Y^n
+	b0 = 2*__EPS0__*k + dT*(k*alpha+sigma);
+	b1 = 2*__EPS0__*k - dT*(k*alpha+sigma);
+	a0 = 2*__EPS0__ + dT*alpha;
+	a1 = 2*__EPS0__ - dT*alpha;
+}
+
+void Operator_Ext_UPML::CalcGradingKappa(int ny, unsigned int pos[3], double Zm, double kappa_v[3], double kappa_i[3],
+										 double cfsK_v[3], double cfsA_v[3], double cfsK_i[3], double cfsA_i[3])
 {
 	double depth=0;
 	double width=0;
 	for (int n=0; n<3; ++n)
 	{
+		if (cfsK_v) {cfsK_v[n]=1; cfsA_v[n]=0; cfsK_i[n]=1; cfsA_i[n]=0;}
 		if ((pos[n] <= m_Size[2*n]) && (m_BC[2*n]==3))  //lower pml in n-dir
 		{
 			width = (m_Op->GetDiscLine(n,m_Size[2*n]) - m_Op->GetDiscLine(n,0))*m_Op->GetGridDelta();
@@ -287,7 +316,7 @@ void Operator_Ext_UPML::CalcGradingKappa(int ny, unsigned int pos[3], double Zm,
 				depth-=m_Op->GetEdgeLength(n,pos)/2;
 			double vars[5] = {depth, width/m_Size[2*n], width, Zm, (double)m_Size[2*n]};
 			if (depth>0)
-				kappa_v[n] = m_GradingFunction->Eval(vars);
+				{kappa_v[n] = m_GradingFunction->Eval(vars); if (cfsK_v) CFSProfile(vars[0], vars[2], cfsK_v[n], cfsA_v[n]);}
 			else
 				kappa_v[n]=0;
 			if (n==ny)
@@ -299,7 +328,7 @@ void Operator_Ext_UPML::CalcGradingKappa(int ny, unsigned int pos[3], double Zm,
 				depth=0;
 			vars[0]=depth;
 			if (depth>0)
-				kappa_i[n] = m_GradingFunction->Eval(vars);
+				{kappa_i[n] = m_GradingFunction->Eval(vars); if (cfsK_i) CFSProfile(vars[0], vars[2], cfsK_i[n], cfsA_i[n]);}
 			else
 				kappa_i[n] = 0;
 		}
@@ -318,7 +347,7 @@ void Operator_Ext_UPML::CalcGradingKappa(int ny, unsigned int pos[3], double Zm,
 				depth+=m_Op->GetEdgeLength(n,pos)/2;
 			double vars[5] = {depth, width/(m_Size[2*n]), width, Zm, (double)m_Size[2*n]};
 			if (depth>0)
-				kappa_v[n] = m_GradingFunction->Eval(vars);
+				{kappa_v[n] = m_GradingFunction->Eval(vars); if (cfsK_v) CFSProfile(vars[0], vars[2], cfsK_v[n], cfsA_v[n]);}
 			else
 				kappa_v[n]=0;
 			if (n==ny)
@@ -330,7 +359,7 @@ void Operator_Ext_UPML::CalcGradingKappa(int ny, unsigned int pos[3], double Zm,
 				depth=0;
 			vars[0]=depth;
 			if (depth>0)
-				kappa_i[n] = m_GradingFunction->Eval(vars);
+				{kappa_i[n] = m_GradingFunction->Eval(vars); if (cfsK_i) CFSProfile(vars[0], vars[2], cfsK_i[n], cfsA_i[n]);}
 			else
 				kappa_i[n]=0;
 		}
@@ -351,6 +380,8 @@ bool Operator_Ext_UPML::BuildExtension()
 	*/
 	if (m_Op==NULL)
 		return false;
+	if (m_CFS)
+		return BuildExtensionCFS();
 
 	vv.Init("vv", m_numLines);
 	vvfo.Init("vvfo", m_numLines);
@@ -441,6 +472,87 @@ bool Operator_Ext_UPML::BuildExtension()
 			}
 		}
 	}
+	return true;
+}
+
+bool Operator_Ext_UPML::BuildExtensionCFS()
+{
+	/* EXPERIMENTAL: the UPML of BuildExtension() with complex-frequency-shifted stretching
+	   s_i = k_i + sigma_i/(alpha_i + j w eps0). Each of the three stretch factors of a field
+	   component is a first-order rational function of j w, applied as a bilinear filter:
+	     main engine:  G <- G + dT*(edge length/area)*curl          (vv=1: the plain integrated curl)
+	     extension:    s_nP  D = G          (D: the "voltage flux" of BuildExtension)
+	                   s_n   D = F
+	                   s_nPP eps E = F
+	   With k=1 and alpha=0 this is algebraically BuildExtension(). */
+	ArrayLib::ArrayNIJK<FDTD_FLOAT>* va[10] = {&v_on, &v_dd, &v_dgn, &v_dgo, &v_ff, &v_fdn, &v_fdo, &v_ee, &v_efn, &v_efo};
+	ArrayLib::ArrayNIJK<FDTD_FLOAT>* ia[10] = {&i_on, &i_dd, &i_dgn, &i_dgo, &i_ff, &i_fdn, &i_fdo, &i_ee, &i_efn, &i_efo};
+	const char* vn[10] = {"v_on","v_dd","v_dgn","v_dgo","v_ff","v_fdn","v_fdo","v_ee","v_efn","v_efo"};
+	const char* in[10] = {"i_on","i_dd","i_dgn","i_dgo","i_ff","i_fdn","i_fdo","i_ee","i_efn","i_efo"};
+	for (int k=0; k<10; ++k)
+	{
+		va[k]->Init(vn[k], m_numLines);
+		ia[k]->Init(in[k], m_numLines);
+	}
+
+	unsigned int pos[3], loc_pos[3];
+	double sig_v[3], sig_i[3], kv[3], av[3], ki[3], ai[3];
+	double eff_Mat[4];
+	double dT = m_Op->GetTimestep();
+	double b0, b1, a0, a1;
+
+	for (loc_pos[0]=0; loc_pos[0]<m_numLines[0]; ++loc_pos[0])
+	{
+		pos[0] = loc_pos[0] + m_StartPos[0];
+		for (loc_pos[1]=0; loc_pos[1]<m_numLines[1]; ++loc_pos[1])
+		{
+			pos[1] = loc_pos[1] + m_StartPos[1];
+			vector<CSPrimitives*> vPrims = m_Op->GetPrimitivesBoundBox(pos[0], pos[1], -1, CSProperties::MATERIAL);
+			for (loc_pos[2]=0; loc_pos[2]<m_numLines[2]; ++loc_pos[2])
+			{
+				pos[2] = loc_pos[2] + m_StartPos[2];
+				unsigned int i=loc_pos[0], j=loc_pos[1], k=loc_pos[2];
+				for (int n=0; n<3; ++n)
+				{
+					m_Op->Calc_EffMatPos(n,pos,eff_Mat,vPrims);
+					CalcGradingKappa(n, pos, __Z0__, sig_v, sig_i, kv, av, ki, ai);
+					int nP = (n+1)%3;
+					int nPP = (n+2)%3;
+
+					// voltages: in the pml, not metal, not PEC
+					if (((sig_v[0]+sig_v[1]+sig_v[2])!=0) && (eff_Mat[1]<1e3) &&
+						((m_Op->GetVV(n,pos[0],pos[1],pos[2]) + m_Op->GetVI(n,pos[0],pos[1],pos[2])) != 0))
+					{
+						v_on(n,i,j,k) = 1;
+						m_Op->SetVV(n,pos[0],pos[1],pos[2], 1);
+						m_Op->SetVI(n,pos[0],pos[1],pos[2], dT * m_Op->GetEdgeLength(n,pos) / m_Op->GetEdgeArea(n,pos));
+						CFSFactor(kv[nP], sig_v[nP], av[nP], dT, b0, b1, a0, a1);      // s_nP D = G
+						v_dd(n,i,j,k) = b1/b0;  v_dgn(n,i,j,k) = a0/b0;  v_dgo(n,i,j,k) = a1/b0;
+						CFSFactor(kv[n], sig_v[n], av[n], dT, b0, b1, a0, a1);         // s_n D = F
+						v_ff(n,i,j,k) = a1/a0;  v_fdn(n,i,j,k) = b0/a0;  v_fdo(n,i,j,k) = b1/a0;
+						CFSFactor(kv[nPP], sig_v[nPP], av[nPP], dT, b0, b1, a0, a1);   // s_nPP eps E = F
+						v_ee(n,i,j,k) = b1/b0;  v_efn(n,i,j,k) = a0/b0/eff_Mat[0];  v_efo(n,i,j,k) = a1/b0/eff_Mat[0];
+					}
+					// currents: in the pml, not PMC
+					if (((sig_i[0]+sig_i[1]+sig_i[2])!=0) &&
+						((m_Op->GetII(n,pos[0],pos[1],pos[2]) + m_Op->GetIV(n,pos[0],pos[1],pos[2])) != 0))
+					{
+						i_on(n,i,j,k) = 1;
+						m_Op->SetII(n,pos[0],pos[1],pos[2], 1);
+						m_Op->SetIV(n,pos[0],pos[1],pos[2], dT * m_Op->GetEdgeLength(n,pos,true) / m_Op->GetEdgeArea(n,pos,true));
+						CFSFactor(ki[nP], sig_i[nP], ai[nP], dT, b0, b1, a0, a1);
+						i_dd(n,i,j,k) = b1/b0;  i_dgn(n,i,j,k) = a0/b0;  i_dgo(n,i,j,k) = a1/b0;
+						CFSFactor(ki[n], sig_i[n], ai[n], dT, b0, b1, a0, a1);
+						i_ff(n,i,j,k) = a1/a0;  i_fdn(n,i,j,k) = b0/a0;  i_fdo(n,i,j,k) = b1/a0;
+						CFSFactor(ki[nPP], sig_i[nPP], ai[nPP], dT, b0, b1, a0, a1);
+						i_ee(n,i,j,k) = b1/b0;  i_efn(n,i,j,k) = a0/b0/eff_Mat[2];  i_efo(n,i,j,k) = a1/b0/eff_Mat[2];
+					}
+				}
+			}
+		}
+	}
+	cerr << "Operator_Ext_UPML: EXPERIMENTAL CFS stretching on: k_max " << m_CFS_KMax << ", alpha_max " << m_CFS_AlphaMax
+		 << " S/m (f " << m_CFS_AlphaMax/(2*PI*__EPS0__) << " Hz), m " << m_CFS_M << ", m_a " << m_CFS_MA << endl;
 	return true;
 }
 

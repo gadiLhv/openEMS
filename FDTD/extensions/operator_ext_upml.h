@@ -65,6 +65,7 @@ public:
 	virtual bool SetGradingFunction(std::string func);
 
 	virtual bool BuildExtension();
+	bool BuildExtensionCFS();
 
 	virtual Engine_Extension* CreateEngineExtention();
 
@@ -94,7 +95,20 @@ protected:
 	std::string m_GradFunc;
 	FunctionParser* m_GradingFunction;
 
-	void CalcGradingKappa(int ny, unsigned int pos[3], double Zm, double kappa_v[3], double kappa_i[3]);
+	void CalcGradingKappa(int ny, unsigned int pos[3], double Zm, double kappa_v[3], double kappa_i[3],
+						  double cfsK_v[3]=NULL, double cfsA_v[3]=NULL, double cfsK_i[3]=NULL, double cfsA_i[3]=NULL);
+
+	/* EXPERIMENTAL complex-frequency-shifted (CFS) stretching, s = k + sigma/(alpha + j w eps0),
+	   with k = 1 + (k_max-1) r^m and alpha = alpha_max (1-r)^m_a, r = depth/width in the pml.
+	   Enabled and set by environment variables for now (UPML_CFS=1, UPML_CFS_KMAX,
+	   UPML_CFS_FALPHA [Hz, alpha_max = 2 pi f eps0], UPML_CFS_M, UPML_CFS_MA).
+	   k_max=1, alpha_max=0 reproduces the plain UPML. */
+	bool   m_CFS;
+	double m_CFS_KMax, m_CFS_AlphaMax, m_CFS_M, m_CFS_MA;
+	void CFSProfile(double depth, double width, double& k, double& a) const;
+
+	//! bilinear coefficients of one stretch factor s = k + sigma/(alpha + j w eps0): s*X = Y  <=>  (b0,b1) on X, (a0,a1) on Y
+	static void CFSFactor(double k, double sigma, double alpha, double dT, double& b0, double& b1, double& a0, double& a1);
 
 	void DeleteOp();
 
@@ -111,6 +125,11 @@ protected:
 	ArrayLib::ArrayNIJK<FDTD_FLOAT> ii;   //calc new current from old current
 	ArrayLib::ArrayNIJK<FDTD_FLOAT> iifo; //calc new current from old current flux
 	ArrayLib::ArrayNIJK<FDTD_FLOAT> iifn; //calc new current from new current flux
+
+	// CFS path: G = integrated curl (main engine), D from G through s_nP, F from D through s_n, E from F through s_nPP/eps
+	// cfs_on: 1 where the CFS update runs; 0 = plain update by the main engine (not in the pml, PEC, metal)
+	ArrayLib::ArrayNIJK<FDTD_FLOAT> v_on,  v_dd, v_dgn, v_dgo, v_ff, v_fdn, v_fdo, v_ee, v_efn, v_efo;
+	ArrayLib::ArrayNIJK<FDTD_FLOAT> i_on,  i_dd, i_dgn, i_dgo, i_ff, i_fdn, i_fdo, i_ee, i_efn, i_efo;
 };
 
 #endif // OPERATOR_EXT_UPML_H
